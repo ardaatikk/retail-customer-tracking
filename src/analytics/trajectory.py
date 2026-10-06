@@ -5,6 +5,7 @@ import pandas as pd
 from src.config.paths import (
     FIGURES_DIR,
     PROCESSED_DATA_DIR,
+    REFERENCE_FRAMES_DIR,
 )
 from src.zones.zone_manager import ZoneManager
 
@@ -17,31 +18,78 @@ TRACKS_PATH = (
     / "tracks.parquet"
 )
 
+REFERENCE_FRAME_PATH = (
+    REFERENCE_FRAMES_DIR
+    / f"{CAMERA_ID}.jpg"
+)
+
 OUTPUT_PATH = (
     FIGURES_DIR
     / f"{CAPTURE_ID}_{CAMERA_ID}_trajectory.png"
 )
 
 
-def draw_zone_background(
+TRAJECTORY_COLOR = (255, 255, 0)
+END_COLOR = (0, 0, 255)
+ZONE_COLOR = (255, 255, 255)
+
+
+def load_background(
+    zone_manager: ZoneManager,
+) -> np.ndarray:
+    image = cv2.imread(
+        str(REFERENCE_FRAME_PATH)
+    )
+
+    if image is None:
+        raise FileNotFoundError(
+            f"Reference frame not found: "
+            f"{REFERENCE_FRAME_PATH}"
+        )
+
+    expected_size = (
+        zone_manager.image_width,
+        zone_manager.image_height,
+    )
+
+    actual_size = (
+        image.shape[1],
+        image.shape[0],
+    )
+
+    if actual_size != expected_size:
+        raise ValueError(
+            "Reference frame dimensions do not "
+            "match zone configuration."
+        )
+
+    dark_overlay = np.zeros_like(
+        image
+    )
+
+    image = cv2.addWeighted(
+        image,
+        0.55,
+        dark_overlay,
+        0.45,
+        0,
+    )
+
+    return image
+
+
+def draw_zones(
     image: np.ndarray,
     zone_manager: ZoneManager,
 ) -> np.ndarray:
-    overlay = image.copy()
-
     for zone_name, polygon in zone_manager.zones.items():
-        cv2.fillPoly(
-            overlay,
-            [polygon],
-            (255, 255, 255),
-        )
-
         cv2.polylines(
             image,
             [polygon],
             True,
-            (180, 180, 180),
+            ZONE_COLOR,
             2,
+            cv2.LINE_AA,
         )
 
         x, y = polygon[0]
@@ -49,24 +97,52 @@ def draw_zone_background(
         cv2.putText(
             image,
             zone_name,
-            (int(x), max(int(y) - 10, 25)),
+            (
+                int(x),
+                max(int(y) - 10, 25),
+            ),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (180, 180, 180),
+            ZONE_COLOR,
             2,
             cv2.LINE_AA,
         )
 
-    cv2.addWeighted(
-        overlay,
-        0.08,
-        image,
-        0.92,
-        0,
-        image,
+    return image
+
+
+def smooth_points(
+    points: np.ndarray,
+    kernel_size: int = 5,
+) -> np.ndarray:
+    if len(points) < kernel_size:
+        return points
+
+    smoothed_x = (
+        pd.Series(points[:, 0])
+        .rolling(
+            window=kernel_size,
+            center=True,
+            min_periods=1,
+        )
+        .mean()
+        .to_numpy()
     )
 
-    return image
+    smoothed_y = (
+        pd.Series(points[:, 1])
+        .rolling(
+            window=kernel_size,
+            center=True,
+            min_periods=1,
+        )
+        .mean()
+        .to_numpy()
+    )
+
+    return np.column_stack(
+        (smoothed_x, smoothed_y)
+    ).astype(np.int32)
 
 
 def draw_customer_trajectory(
@@ -80,20 +156,16 @@ def draw_customer_trajectory(
 
     points = customer_data[
         ["ground_x", "ground_y"]
-    ].to_numpy(dtype=np.int32)
+    ].to_numpy(
+        dtype=np.int32
+    )
 
     if len(points) == 0:
         return image
 
-    if len(points) >= 2:
-        cv2.polylines(
-            image,
-            [points],
-            False,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
+    points = smooth_points(
+        points
+    )
 
     start_point = tuple(
         points[0]
@@ -103,57 +175,39 @@ def draw_customer_trajectory(
         points[-1]
     )
 
+    if len(points) >= 2:
+        cv2.polylines(
+            image,
+            [points],
+            False,
+            TRAJECTORY_COLOR,
+            3,
+            cv2.LINE_AA,
+        )
+
     cv2.circle(
         image,
         start_point,
-        8,
-        (255, 255, 255),
+        7,
+        TRAJECTORY_COLOR,
         -1,
     )
 
     cv2.circle(
         image,
         end_point,
-        8,
-        (100, 100, 100),
+        7,
+        END_COLOR,
         -1,
     )
-
-    cv2.putText(
-        image,
-        f"Person #{customer_id} START",
-        (
-            start_point[0] + 10,
-            start_point[1] - 10,
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        image,
-        f"Person #{customer_id} END",
-        (
-            end_point[0] + 10,
-            end_point[1] - 10,
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (150, 150, 150),
-        2,
-        cv2.LINE_AA,
-    )
-
     return image
 
 
 def generate_trajectory() -> None:
     if not TRACKS_PATH.exists():
         raise FileNotFoundError(
-            f"Track data not found: {TRACKS_PATH}"
+            f"Track data not found: "
+            f"{TRACKS_PATH}"
         )
 
     tracks = pd.read_parquet(
@@ -171,22 +225,44 @@ def generate_trajectory() -> None:
             "No confirmed customer tracks found."
         )
 
+    confirmed_track_points = len(
+        tracks
+    )
+
     zone_manager = ZoneManager(
         CAMERA_ID
     )
 
-    image = np.zeros(
-        (
-            zone_manager.image_height,
-            zone_manager.image_width,
-            3,
-        ),
-        dtype=np.uint8,
+    frame_bottom = (
+        zone_manager.image_height - 1
     )
 
-    image = draw_zone_background(
-        image,
-        zone_manager,
+    tracks = tracks[
+        tracks["ground_y"] < frame_bottom
+    ].copy()
+
+    if tracks.empty:
+        raise RuntimeError(
+            "No valid confirmed customer "
+            "track points found."
+        )
+
+    spatial_points = len(
+        tracks
+    )
+
+    excluded_points = (
+        confirmed_track_points
+        - spatial_points
+    )
+
+    image = load_background(
+        zone_manager
+    )
+
+    image = draw_zones(
+        image=image,
+        zone_manager=zone_manager,
     )
 
     customer_ids = sorted(
@@ -225,12 +301,27 @@ def generate_trajectory() -> None:
 
     print("Trajectory analytics")
     print("--------------------")
+
     print(
-        f"Customers: {len(customer_ids)}"
+        f"Customers: "
+        f"{len(customer_ids)}"
     )
+
     print(
-        f"Track points: {len(tracks)}"
+        f"Confirmed track points: "
+        f"{confirmed_track_points}"
     )
+
+    print(
+        f"Spatial points used: "
+        f"{spatial_points}"
+    )
+
+    print(
+        f"Excluded truncated points: "
+        f"{excluded_points}"
+    )
+
     print(
         f"Saved: {OUTPUT_PATH}"
     )

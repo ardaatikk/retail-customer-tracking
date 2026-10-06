@@ -22,7 +22,7 @@ from src.zones.zone_manager import ZoneManager
 
 CAMERA_ID = "Showroom"
 CAPTURE_ID = "capture1"
-START_SECOND = 95
+START_SECOND = 0
 
 
 def run_tracking_pipeline() -> None:
