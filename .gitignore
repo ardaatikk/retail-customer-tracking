@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+environment/
+
+# macOS
+.DS_Store
+
+# IDE / Editors
+.vscode/
+.idea/
+
+# Environment variables
+.env
+.env.*
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+
+# Raw and processed data
+data/raw/*
+!data/raw/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+
+# Generated artifacts
+artifacts/videos/*
+!artifacts/videos/.gitkeep
+
+artifacts/figures/*
+!artifacts/figures/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
