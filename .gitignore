@@ -38,9 +38,8 @@ artifacts/videos/*
 
 artifacts/figures/*
 !artifacts/figures/.gitkeep
+!artifacts/figures/capture1_Showroom_trajectory.png
+!artifacts/figures/capture1_Showroom_heatmap.png
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Logs
-*.log
+# Pytest
+.pytest_cache/
