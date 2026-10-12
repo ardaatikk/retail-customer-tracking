@@ -1,3 +1,4 @@
+from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
@@ -7,7 +8,7 @@ from src.config.paths import (
     PROCESSED_DATA_DIR,
     REFERENCE_FRAMES_DIR,
 )
-from src.zones.zone_manager import ZoneManager
+from src.zones.zone_manager import ZoneManager, ZONE_CONFIG_DIR
 
 
 CAMERA_ID = "Showroom"
@@ -36,20 +37,20 @@ ZONE_COLOR = (255, 255, 255)
 
 def load_background(
     zone_manager: ZoneManager,
+    reference_frame_path: Path = None,
 ) -> np.ndarray:
-    image = cv2.imread(
-        str(REFERENCE_FRAME_PATH)
-    )
+    reference_frame_path = reference_frame_path or REFERENCE_FRAME_PATH
+    image = cv2.imread(str(reference_frame_path))
 
     if image is None:
         raise FileNotFoundError(
             f"Reference frame not found: "
-            f"{REFERENCE_FRAME_PATH}"
+            f"{reference_frame_path}"
         )
 
     expected_size = (
-        zone_manager.image_width,
-        zone_manager.image_height,
+        (zone_manager.image_width, zone_manager.image_height)
+        if zone_manager is not None else (image.shape[1], image.shape[0])
     )
 
     actual_size = (
@@ -203,39 +204,47 @@ def draw_customer_trajectory(
     return image
 
 
-def generate_trajectory() -> None:
-    if not TRACKS_PATH.exists():
-        raise FileNotFoundError(
-            f"Track data not found: "
-            f"{TRACKS_PATH}"
+def generate_trajectory(
+    tracks: pd.DataFrame = None,
+    camera_id: str = None,
+    reference_frame_path: Path = None,
+    output_path: Path = None,
+) -> None:
+    if tracks is None:
+        if not TRACKS_PATH.exists():
+            raise FileNotFoundError(
+                f"Track data not found: "
+                f"{TRACKS_PATH}"
+            )
+
+        tracks = pd.read_parquet(
+            TRACKS_PATH
         )
 
-    tracks = pd.read_parquet(
-        TRACKS_PATH
-    )
+        tracks = tracks[
+            (tracks["camera_id"] == CAMERA_ID)
+            & (tracks["capture_id"] == CAPTURE_ID)
+            & (tracks["customer_id"].notna())
+        ].copy()
 
-    tracks = tracks[
-        (tracks["camera_id"] == CAMERA_ID)
-        & (tracks["capture_id"] == CAPTURE_ID)
-        & (tracks["customer_id"].notna())
-    ].copy()
+        if tracks.empty:
+            raise RuntimeError(
+                "No confirmed customer tracks found."
+            )
 
-    if tracks.empty:
-        raise RuntimeError(
-            "No confirmed customer tracks found."
-        )
-
+    else:
+        tracks = tracks.copy()
+    camera_id = camera_id or CAMERA_ID
+    output_path = Path(output_path) if output_path is not None else OUTPUT_PATH
     confirmed_track_points = len(
         tracks
     )
 
-    zone_manager = ZoneManager(
-        CAMERA_ID
+    zone_manager = (
+        ZoneManager(camera_id) if (ZONE_CONFIG_DIR / f"{camera_id}.json").exists() else None
     )
-
-    frame_bottom = (
-        zone_manager.image_height - 1
-    )
+    background = load_background(zone_manager, reference_frame_path)
+    frame_bottom = background.shape[0] - 1
 
     tracks = tracks[
         tracks["ground_y"] < frame_bottom
@@ -256,14 +265,9 @@ def generate_trajectory() -> None:
         - spatial_points
     )
 
-    image = load_background(
-        zone_manager
-    )
-
-    image = draw_zones(
-        image=image,
-        zone_manager=zone_manager,
-    )
+    image = background
+    if zone_manager is not None:
+        image = draw_zones(image=image, zone_manager=zone_manager)
 
     customer_ids = sorted(
         tracks["customer_id"]
@@ -283,27 +287,24 @@ def generate_trajectory() -> None:
             customer_id=customer_id,
         )
 
-    FIGURES_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     success = cv2.imwrite(
-        str(OUTPUT_PATH),
+        str(output_path),
         image,
     )
 
     if not success:
         raise RuntimeError(
             f"Could not save trajectory image: "
-            f"{OUTPUT_PATH}"
+            f"{output_path}"
         )
 
     print("Trajectory analytics")
     print("--------------------")
 
     print(
-        f"Customers: "
+        f"Confirmed tracks: "
         f"{len(customer_ids)}"
     )
 
@@ -323,7 +324,7 @@ def generate_trajectory() -> None:
     )
 
     print(
-        f"Saved: {OUTPUT_PATH}"
+        f"Saved: {output_path}"
     )
 
 
