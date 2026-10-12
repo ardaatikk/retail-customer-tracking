@@ -1,4 +1,6 @@
+from pathlib import Path
 import pandas as pd
+from src.analytics.input import load_selected_tracks
 
 from src.config.paths import (
     PROCESSED_DATA_DIR,
@@ -24,43 +26,33 @@ ZONE_SUMMARY_PATH = (
 )
 
 
-def load_tracks() -> pd.DataFrame:
-    if not TRACKS_PATH.exists():
-        raise FileNotFoundError(
-            f"Track data not found: "
-            f"{TRACKS_PATH}"
-        )
+def load_tracks(
+    tracks_path: Path = None,
+    camera_id: str = None,
+    capture_id: str = None,
+) -> pd.DataFrame:
+    if tracks_path is None:
+        return load_selected_tracks(TRACKS_PATH, camera_id or CAMERA_ID, capture_id or CAPTURE_ID)
+    return load_selected_tracks(tracks_path, camera_id, capture_id)
 
-    tracks = pd.read_parquet(
-        TRACKS_PATH
-    )
 
-    tracks = tracks[
-        (tracks["camera_id"] == CAMERA_ID)
-        & (tracks["capture_id"] == CAPTURE_ID)
-        & (tracks["customer_id"].notna())
-    ].copy()
-
-    if tracks.empty:
-        raise RuntimeError(
-            "No confirmed customer tracks found."
-        )
-
-    tracks["customer_id"] = (
-        tracks["customer_id"]
-        .astype(int)
-    )
-
+def _scoped(tracks: pd.DataFrame) -> pd.DataFrame:
+    tracks = tracks.copy()
+    if "camera_id" not in tracks:
+        tracks["camera_id"] = CAMERA_ID
+    if "capture_id" not in tracks:
+        tracks["capture_id"] = CAPTURE_ID
     return tracks
 
 
 def calculate_customer_summary(
     tracks: pd.DataFrame,
 ) -> pd.DataFrame:
+    tracks = _scoped(tracks)
     records = []
 
-    for customer_id, customer_data in tracks.groupby(
-        "customer_id"
+    for (camera_id, capture_id, customer_id), customer_data in tracks.groupby(
+        ["camera_id", "capture_id", "customer_id"]
     ):
         customer_data = customer_data.sort_values(
             "timestamp"
@@ -99,8 +91,8 @@ def calculate_customer_summary(
 
         records.append(
             {
-                "camera_id": CAMERA_ID,
-                "capture_id": CAPTURE_ID,
+                "camera_id": camera_id,
+                "capture_id": capture_id,
                 "customer_id": int(
                     customer_id
                 ),
@@ -124,8 +116,11 @@ def calculate_customer_summary(
 def calculate_zone_summary(
     tracks: pd.DataFrame,
 ) -> pd.DataFrame:
+    tracks = _scoped(tracks)
     tracks = tracks.sort_values(
         [
+            "camera_id",
+            "capture_id",
             "customer_id",
             "timestamp",
         ]
@@ -133,7 +128,7 @@ def calculate_zone_summary(
 
     tracks["next_timestamp"] = (
         tracks
-        .groupby("customer_id")["timestamp"]
+        .groupby(["camera_id", "capture_id", "customer_id"])["timestamp"]
         .shift(-1)
     )
 
@@ -166,7 +161,7 @@ def calculate_zone_summary(
 
     zone_summary = (
         zone_tracks
-        .groupby("zone")
+        .groupby(["camera_id", "capture_id", "zone"])
         .agg(
             customer_count=(
                 "customer_id",
@@ -184,6 +179,8 @@ def calculate_zone_summary(
         zone_tracks
         .groupby(
             [
+                "camera_id",
+                "capture_id",
                 "customer_id",
                 "zone",
             ]
@@ -194,7 +191,7 @@ def calculate_zone_summary(
 
     average_dwell = (
         customer_zone_dwell
-        .groupby("zone")[
+        .groupby(["camera_id", "capture_id", "zone"])[
             "dwell_seconds"
         ]
         .mean()
@@ -206,97 +203,37 @@ def calculate_zone_summary(
 
     zone_summary = zone_summary.merge(
         average_dwell,
-        on="zone",
+        on=["camera_id", "capture_id", "zone"],
         how="left",
-    )
-
-    zone_summary.insert(
-        0,
-        "capture_id",
-        CAPTURE_ID,
-    )
-
-    zone_summary.insert(
-        0,
-        "camera_id",
-        CAMERA_ID,
     )
 
     return zone_summary
 
 
-def generate_summary() -> None:
-    tracks = load_tracks()
-
-    customer_summary = (
-        calculate_customer_summary(
-            tracks
-        )
-    )
-
-    zone_summary = (
-        calculate_zone_summary(
-            tracks
-        )
-    )
-
-    PROCESSED_DATA_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    customer_summary.to_parquet(
-        CUSTOMER_SUMMARY_PATH,
-        index=False,
-    )
-
-    zone_summary.to_parquet(
-        ZONE_SUMMARY_PATH,
-        index=False,
-    )
-
-    print("Customer & zone summary")
-    print("-----------------------")
-
-    print(
-        f"Customers: "
-        f"{len(customer_summary)}"
-    )
-
-    print()
-
-    print("Customer summary:")
-
+def generate_summary(
+    tracks: pd.DataFrame = None,
+    output_dir: Path = None,
+) -> None:
+    tracks = load_tracks() if tracks is None else tracks
+    customer_summary = calculate_customer_summary(tracks)
+    zone_summary = calculate_zone_summary(tracks)
+    customer_path = CUSTOMER_SUMMARY_PATH if output_dir is None else Path(output_dir) / "customer_summary.parquet"
+    zone_path = ZONE_SUMMARY_PATH if output_dir is None else Path(output_dir) / "zone_summary.parquet"
+    customer_path.parent.mkdir(parents=True, exist_ok=True)
+    customer_summary.to_parquet(customer_path, index=False)
+    print("Confirmed track summary")
+    print(f"Confirmed tracks: {len(customer_summary)}")
     for row in customer_summary.itertuples():
-        print(
-            f"  Person #{row.customer_id}: "
-            f"{row.store_time_seconds:.2f}s | "
-            f"{row.zone_path}"
-        )
-
-    print()
-
-    print("Zone summary:")
-
-    for row in zone_summary.itertuples():
-        print(
-            f"  {row.zone}: "
-            f"{row.customer_count} customers | "
-            f"total {row.total_dwell_seconds:.2f}s | "
-            f"avg {row.average_dwell_seconds:.2f}s"
-        )
-
-    print()
-
-    print(
-        f"Customer data: "
-        f"{CUSTOMER_SUMMARY_PATH}"
-    )
-
-    print(
-        f"Zone data: "
-        f"{ZONE_SUMMARY_PATH}"
-    )
+        print(f"  Person #{row.customer_id}: {row.store_time_seconds:.2f}s | {row.zone_path}")
+    print(f"Track summary: {customer_path}")
+    if zone_summary.empty:
+        print("Zone summary skipped: selected tracks have no zone assignments")
+    else:
+        zone_path.parent.mkdir(parents=True, exist_ok=True)
+        zone_summary.to_parquet(zone_path, index=False)
+        print(f"Zone summary: {zone_path}")
+        for row in zone_summary.itertuples():
+            print(f"  {row.zone}: {row.customer_count} tracks | total {row.total_dwell_seconds:.2f}s")
 
 
 if __name__ == "__main__":

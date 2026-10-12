@@ -43,3 +43,50 @@ artifacts/figures/*
 
 # Pytest
 .pytest_cache/
+
+# Local test logs
+*.log
+
+# Local replay outputs
+artifacts/replay/
+
+# Private camera media: keep local, including files outside artifact folders
+*.mp4
+*.MP4
+*.mkv
+*.MKV
+*.mov
+*.MOV
+*.avi
+*.AVI
+*.webm
+*.WEBM
+*.m4v
+*.M4V
+*.mpeg
+*.MPEG
+*.mpg
+*.MPG
+*.h264
+*.H264
+*.h265
+*.H265
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+*.webp
+*.WEBP
+*.bmp
+*.BMP
+*.tif
+*.TIF
+*.tiff
+*.TIFF
+
+# Public CITIC-MTMC Showroom examples remain included
+!src/config/reference_frames/Showroom.jpg
+!artifacts/figures/capture1_Showroom_trajectory.png
+!artifacts/figures/capture1_Showroom_heatmap.png
