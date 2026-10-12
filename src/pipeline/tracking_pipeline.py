@@ -1,8 +1,6 @@
 import argparse
 from pathlib import Path
-from datetime import datetime, timezone
 import re
-from uuid import uuid4
 import time
 
 import cv2
@@ -12,6 +10,7 @@ from src.config.paths import (
     PROCESSED_DATA_DIR,
     PROJECT_ROOT,
     VIDEOS_DIR,
+    SESSIONS_DIR,
 )
 from src.data.track_writer import TrackWriter
 from src.tracking.customer_state import (
@@ -24,6 +23,7 @@ from src.visualization.draw import (
 )
 from src.zones.zone_manager import ZoneManager
 from src.video.source import VideoInput, VideoSource
+from src.video.session import make_session_id
 from src.video.recorder import StreamRecorder
 
 
@@ -40,6 +40,7 @@ def run_tracking_pipeline(
     record_stream: bool = False,
     model_name: str = "yolo11n.pt",
     tracker_profile: str = "auto",
+    session_name: str = None,
 ) -> None:
     if tracker_profile not in ("auto", "baseline", "recovery"):
         raise ValueError("tracker_profile must be auto, baseline or recovery")
@@ -53,22 +54,6 @@ def run_tracking_pipeline(
         / f"{CAMERA_ID}.mp4"
     )
 
-    output_path = (
-        VIDEOS_DIR
-        / f"{CAPTURE_ID}_{CAMERA_ID}_tracked.mp4"
-    )
-
-    track_output_path = (
-        PROCESSED_DATA_DIR
-        / "tracks.parquet"
-    )
-
-    VIDEOS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    confirmed_track_output_path = None
     video = VideoSource(video_path if source is None else source)
     writer = None
     recorder = None
@@ -80,18 +65,15 @@ def run_tracking_pipeline(
 
     try:
         recording_camera_id = camera_id or ("faydam1" if video.is_live else CAMERA_ID)
-        recording_capture_id = CAPTURE_ID
+        recording_capture_id = CAPTURE_ID if not video.is_live else None
+        session_id = make_session_id(recording_camera_id, "live" if video.is_live else "file", session_name)
         if video.is_live:
-            recording_capture_id = (
-                datetime.now(timezone.utc).strftime("live_%Y%m%dT%H%M%SZ")
-                + "_" + uuid4().hex[:8]
-            )
-            output_path = VIDEOS_DIR / recording_camera_id / f"{recording_capture_id}_tracked.mp4"
-            track_output_path = (
-                PROCESSED_DATA_DIR / recording_camera_id / recording_capture_id / "tracks_raw.parquet"
-            )
-            confirmed_track_output_path = track_output_path.with_name("tracks_confirmed.parquet")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            recording_capture_id = session_id
+        session_dir = SESSIONS_DIR / recording_camera_id / session_id
+        output_path = session_dir / f"{session_id}_annotated.mp4"
+        track_output_path = session_dir / f"{session_id}_all_tracks_debug.parquet"
+        confirmed_track_output_path = session_dir / f"{session_id}_confirmed_tracks.parquet"
+        session_dir.mkdir(parents=True, exist_ok=False)
 
         if not video.is_live:
             total_frames = int(video.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -115,7 +97,7 @@ def run_tracking_pipeline(
         else:
             tracker = PersonTracker(model_name=model_name)
         if record_stream:
-            raw_output_path = output_path.with_name(f"{recording_capture_id}_raw.mkv")
+            raw_output_path = output_path.with_name(f"{recording_capture_id}_original.mkv")
             recorder = StreamRecorder(str(source), raw_output_path)
             print(f"Raw recording requested: {raw_output_path}")
 
@@ -124,7 +106,7 @@ def run_tracking_pipeline(
 
         track_writer = TrackWriter(
             track_output_path,
-            **({"confirmed_output_path": confirmed_track_output_path}
+            **({"confirmed_output_path": confirmed_track_output_path, "confirmed_frames_only": True}
                if confirmed_track_output_path is not None else {}),
         )
 
@@ -426,6 +408,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", default="yolo11n.pt", help="YOLO model weights or local path")
     parser.add_argument("--tracker-profile", choices=["auto", "baseline", "recovery"],
                         default="auto", help="auto: recovery for live sources, baseline for files")
+    parser.add_argument("--session-name", help="Optional readable recording label, e.g. doorway-walk")
     args = parser.parse_args()
     run_tracking_pipeline(source=args.source, camera_id=args.camera_id,
-                          record_stream=args.record_stream, model_name=args.model, tracker_profile=args.tracker_profile)
+                          record_stream=args.record_stream, model_name=args.model, tracker_profile=args.tracker_profile, session_name=args.session_name)
