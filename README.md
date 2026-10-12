@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![YOLO11](https://img.shields.io/badge/YOLO11-Ultralytics-blueviolet)](https://docs.ultralytics.com/models/yolo11/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green?logo=opencv&logoColor=white)](https://opencv.org/)
-[![Tests](https://img.shields.io/badge/Tests-115%20Passed-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-121%20Passed-brightgreen)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 An end-to-end computer vision pipeline for tracking customers in indoor environments and transforming raw video into interpretable behavioral analytics.
@@ -49,7 +49,7 @@ The pipeline combines pretrained person detection, multi-object tracking, custom
 - Per-zone analytics
 - Parquet-based structured outputs
 - Reproducible CITIC-MTMC dataset download
-- Automated unit testing with **115 tests**
+- Automated unit testing with **121 tests**
 - GitHub Actions continuous integration
 - Architecture prepared for future multi-camera tracking
 
@@ -425,16 +425,14 @@ Use `--tracker-profile baseline` to restore the original tracking settings. Cust
 
 ### Session outputs
 
-Each live run receives a UTC timestamp and random suffix in its session ID, so new live sessions do not overwrite earlier runs:
+Each session ID contains the camera, live/replay mode, readable date/time in Europe/Istanbul, without a random suffix. An optional `--session-name doorway-walk` adds a descriptive label. Videos and tables share this prefix so they can be matched directly; an existing session directory causes an error instead of being overwritten:
 
 ```text
-data/processed/live1/<session>/
-├── tracks_raw.parquet
-└── tracks_confirmed.parquet
-
-artifacts/videos/live1/
-├── <session>_tracked.mp4
-└── <session>_raw.mkv       # only with --record-stream
+artifacts/sessions/live1/<session>/
+├── <session>_confirmed_tracks.parquet
+├── <session>_all_tracks_debug.parquet
+├── <session>_annotated.mp4
+└── <session>_original.mkv       # only with --record-stream
 ```
 
 The annotated MP4 contains the processed frames, green boxes for confirmed tracks, person labels, and elapsed time. It is written at the camera FPS. If processing skips frames, parts of this video can play faster than real time.
@@ -461,22 +459,23 @@ ffmpeg -i path/to/session_raw.mkv -map 0:v:0 -c:v copy \
 
 ### Raw and confirmed Parquet tables
 
-`tracks_raw.parquet` contains every observation returned by the tracker, including unconfirmed tracks. `tracks_confirmed.parquet` contains the complete histories of tracks that were confirmed by the end of the session. Pre-confirmation rows are retained so first-seen times are not lost.
+`<session>_all_tracks_debug.parquet` contains every observation returned by the tracker, including unconfirmed tracks. `<session>_confirmed_tracks.parquet` contains only observations that were already confirmed when processed, matching green-box frames. Unconfirmed tracks and pre-confirmation observations are excluded from this primary file. Their full histories remain in the clearly named debug table; a `first_seen` metadata column preserves the original start time for duration analysis.
 
 Both tables retain camera/session/frame/track identifiers, timestamps, bounding-box coordinates, ground points, confidence, and zone. Additional fields distinguish the confirmation stages:
 
 | Field | Meaning |
 |---|---|
 | `customer_id` | Raw: ID assigned at observation time, otherwise null. Confirmed history: final assigned ID on all rows. |
-| `confirmed_at_frame` | Whether that track was already confirmed at this observation. |
+| `confirmed_at_frame` | Whether that track was already confirmed at this observation. Always true in new primary confirmed exports. |
+| `first_seen` | Original first observation timestamp, retained even when earlier rows are omitted from the primary export. |
 | `confirmed_at` | Session time in seconds when the track was confirmed; null if it never was. |
 | `final_customer_id` | ID assigned by session end; null for tracks that remain unconfirmed. |
 
-Compare tables using `camera_id`, `capture_id`, `local_track_id`, and `frame_id`. To analyze only observations after confirmation, filter `confirmed_at_frame == True`. Raw and confirmed histories can have equal row counts if all tracks eventually become confirmed.
+Compare tables using `camera_id`, `capture_id`, `local_track_id`, and `frame_id`. Primary confirmed rows have `confirmed_at_frame=True` and a non-null `customer_id`. The video label uses `customer_id`, not `local_track_id`: local track 12 can appear as Person #1. The debug file is for diagnostics and can contain invisible/unconfirmed tracks.
 
 An observation is added only when the tracker returns a track. Frames with no tracks and network timeouts do not produce event rows. Empty sessions produce two empty live-session tables; sessions without confirmations produce an empty confirmed table.
 
-Track rows accumulate in memory and are saved on normal exit. An abrupt process termination can lose these rows. The existing file workflow still writes the original `data/processed/tracks.parquet` output.
+Legacy single `tracks.parquet` files may contain unconfirmed tracks and lack frame-time confirmation flags; they are not automatically rewritten. Track rows accumulate in memory and are saved on normal exit. An abrupt process termination can lose these rows. File runs, including Showroom, now write an annotated video and separate confirmed/debug tables into `artifacts/sessions/<camera>/<session>/`. File decoding, tracking defaults and zone handling are unchanged.
 
 ### Analyze a live-session export
 
@@ -484,7 +483,7 @@ Select the confirmed history file and its camera/session:
 
 ```bash
 python -m src.pipeline.analytics_pipeline \
-  --tracks data/processed/live1/SESSION_ID/tracks_confirmed.parquet \
+  --tracks artifacts/sessions/live1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
   --camera-id live1 \
   --capture-id SESSION_ID
 ```
@@ -505,11 +504,11 @@ Custom inputs do not use the Showroom background. Without `--reference-frame`, t
 
 ```bash
 python -m src.pipeline.analytics_pipeline \
-  --tracks data/processed/live1/SESSION_ID/tracks_confirmed.parquet \
+  --tracks artifacts/sessions/live1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
   --camera-id live1 \
   --capture-id SESSION_ID \
   --reference-frame path/to/live1_reference.png \
-  --output-dir artifacts/analytics/live1/SESSION_ID
+  --output-dir artifacts/sessions/live1/SESSION_ID/analytics
 ```
 
 Ground points use original image pixels; a resized or different-camera reference is unsuitable. A matching camera-specific zone configuration, if present, is used for figure overlays and dimension checks; it does not recompute missing zone values in the Parquet input.
@@ -571,7 +570,7 @@ pytest -q
 Current test suite:
 
 ```text
-115 passed
+121 passed
 ```
 
 Tests cover:
@@ -593,7 +592,7 @@ Tests cover:
 - Analytics camera/session selection, ID reuse isolation, raw history selection, and zone-free output
 - Offline replay outputs, native video dimensions, frame sampling, timestamps, and safe cleanup with synthetic frames
 
-Network access, a camera, FFmpeg, and real model inference are not required by the unit tests. The 115-test result was verified locally on 12 October 2026; this RTSP branch has not yet run on GitHub CI.
+Network access, a camera, FFmpeg, and real model inference are not required by the unit tests. The 121-test result was verified locally on 12 October 2026; this RTSP branch has not yet run on GitHub CI.
 
 ### Manual camera checks
 
@@ -632,13 +631,13 @@ python tests/integration/recorded_camera_check.py \
 
 This is a local video replay, not a live camera connection. A stride of 3 processes every third source frame: about 8 observations per second for a 24 FPS recording. `--max-frames 80` limits the run to 80 processed frames. Use `--tracker-profile baseline` or `--model yolo11s.pt` for a separate comparison run; only one model runs at a time. Recorded replay does not test network reconnect or variable live processing delays.
 
-Each run writes to a new `artifacts/replay/<camera>/<session>/` directory by default:
+Live and replay runs share the `artifacts/sessions/<camera>/<session>/` layout. Each replay run writes to a new session directory by default:
 
 ```text
-tracks_raw.parquet
-tracks_confirmed.parquet
+<session>_all_tracks_debug.parquet
+<session>_confirmed_tracks.parquet
 summary.json
-tracked_preview.mp4       # only when --save-video is supplied
+<session>_annotated.mp4       # only when --save-video is supplied
 ```
 
 Use `--output-dir /path/to/new_output_directory` to choose another local destination. Existing destinations are rejected rather than overwritten. Parquet export consistency is checked before the run is reported as successful. The summary includes processed-frame counts, confirmation times and first-to-last track spans; it records source/model filenames rather than absolute local paths.
@@ -646,7 +645,7 @@ Use `--output-dir /path/to/new_output_directory` to choose another local destina
 Video generation is opt-in with `--save-video`. The output preserves the source frame dimensions and writes at the sampled FPS, so processing speed does not accelerate it. Irregular source timestamps can still differ from a constant-FPS preview. MP4 playback support depends on the OpenCV codec; convert a completed preview to H.264 if needed:
 
 ```bash
-ffmpeg -i path/to/tracked_preview.mp4 -c:v libx264 \
+ffmpeg -i path/to/session_annotated.mp4 -c:v libx264 \
   -pix_fmt yuv420p -movflags +faststart path/to/replay_h264.mp4
 ```
 
@@ -684,7 +683,9 @@ retail-customer-tracking/
 │       └── ci.yml
 ├── artifacts/
 │   ├── figures/
-│   └── videos/
+│   ├── videos/
+│   └── sessions/
+│       └── <camera>/<session>/
 ├── data/
 │   ├── processed/
 │   └── raw/
@@ -837,3 +838,14 @@ See [LICENSE](LICENSE) for details.
 **Arda Atik**
 
 Artificial Intelligence Engineer
+Readable recording label example: add `--session-name doorway-walk` to either the live or replay command. Videos and Parquet files then share a camera/label/date prefix. Existing recordings remain untouched unless explicitly migrated. Legacy files without frame-time confirmation flags can only be filtered by final assigned customer IDs; exact green-box start frames cannot be reconstructed.
+
+## Session folder layout
+
+Each live or replay session keeps its videos, clean Parquet, debug Parquet and optional summary together under `artifacts/sessions/<camera>/<session>/`. Live sessions normally contain two tables and one annotated video; `--record-stream` adds the original MKV. Replay produces two tables and summary.json; `--save-video` adds a video. A run with no decoded frames may have no video. Explicit replay --output-dir still overrides this location.
+
+Generated session bundles are local and ignored by Git. Showroom uses the same session layout under `artifacts/sessions/Showroom/`; dataset input and tracking behavior are unchanged. Older outputs can be consolidated into this layout with verified copies; source files are retained in a local `artifacts/session_archive/` tree for rollback. Legacy data without frame-time confirmation flags is filtered by final assigned customer IDs, not reconstructed green-frame timing. Migration details live beside the consolidated session. Missing historical videos or Parquet inputs are recorded rather than fabricated.
+
+### Showroom session outputs
+
+Each Showroom run has its own directory in `artifacts/sessions/Showroom/`, containing `<session>_annotated.mp4`, `<session>_confirmed_tracks.parquet`, and `<session>_all_tracks_debug.parquet`. For analytics, pass that session’s confirmed table with `--tracks`; the legacy default input remains available only for older exports. `data/raw/` remains the dataset input location.
