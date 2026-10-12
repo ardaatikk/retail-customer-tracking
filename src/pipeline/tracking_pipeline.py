@@ -1,3 +1,8 @@
+import argparse
+from pathlib import Path
+from datetime import datetime, timezone
+import re
+from uuid import uuid4
 import time
 
 import cv2
@@ -18,14 +23,30 @@ from src.visualization.draw import (
     draw_zones,
 )
 from src.zones.zone_manager import ZoneManager
+from src.video.source import VideoInput, VideoSource
+from src.video.recorder import StreamRecorder
 
 
 CAMERA_ID = "Showroom"
 CAPTURE_ID = "capture1"
 START_SECOND = 0
+RECOVERY_TRACKER_CONFIG = Path(__file__).resolve().parents[1] / "config" / "trackers" / "bytetrack_recovery.yaml"
 
 
-def run_tracking_pipeline() -> None:
+def run_tracking_pipeline(
+    source: VideoInput = None,
+    *,
+    camera_id: str = None,
+    record_stream: bool = False,
+    model_name: str = "yolo11n.pt",
+    tracker_profile: str = "auto",
+) -> None:
+    if tracker_profile not in ("auto", "baseline", "recovery"):
+        raise ValueError("tracker_profile must be auto, baseline or recovery")
+    if record_stream and not str(source).lower().startswith(("rtsp://", "rtsps://")):
+        raise ValueError("--record-stream requires an RTSP source")
+    if camera_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", camera_id):
+        raise ValueError("camera_id must contain letters, digits, underscores or hyphens")
     video_path = (
         CITIC_MTMC_DATASET_DIR
         / CAPTURE_ID
@@ -47,122 +68,132 @@ def run_tracking_pipeline() -> None:
         exist_ok=True,
     )
 
-    cap = cv2.VideoCapture(
-        str(video_path)
-    )
-
-    if not cap.isOpened():
-        raise RuntimeError(
-            f"Could not open video: {video_path}"
-        )
-
-    fps = cap.get(
-        cv2.CAP_PROP_FPS
-    )
-
-    width = int(
-        cap.get(
-            cv2.CAP_PROP_FRAME_WIDTH
-        )
-    )
-
-    height = int(
-        cap.get(
-            cv2.CAP_PROP_FRAME_HEIGHT
-        )
-    )
-
-    total_frames = int(
-        cap.get(
-            cv2.CAP_PROP_FRAME_COUNT
-        )
-    )
-
-    start_frame = int(
-        START_SECOND * fps
-    )
-
-    cap.set(
-        cv2.CAP_PROP_POS_FRAMES,
-        start_frame,
-    )
-
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(
-            *"mp4v"
-        ),
-        fps,
-        (width, height),
-    )
-
-    if not writer.isOpened():
-        cap.release()
-
-        raise RuntimeError(
-            f"Could not create output video: "
-            f"{output_path}"
-        )
-
-    tracker = PersonTracker()
-
-    zone_manager = ZoneManager(
-        CAMERA_ID
-    )
-
-    track_writer = TrackWriter(
-        track_output_path
-    )
-
-    customer_manager = CustomerStateManager(
-        min_observation_seconds=0.5,
-        min_displacement_pixels=10.0,
-        min_movement_frames=5,
-        movement_step_pixels=2.0,
-    )
-
-    paused = False
-    last_frame = None
-    frame_id = 0
-
-    print(f"Camera: {CAMERA_ID}")
-    print(f"Capture: {CAPTURE_ID}")
-    print(f"FPS: {fps:.2f}")
-    print(
-        f"Duration: "
-        f"{total_frames / fps:.1f}s"
-    )
-
-    print()
-    print("Controls:")
-    print("  Space : Pause / Resume")
-    print("  Q     : Quit")
-    print()
+    confirmed_track_output_path = None
+    video = VideoSource(video_path if source is None else source)
+    writer = None
+    recorder = None
+    recorder_warning = False
+    fps = video.info.fps
+    total_frames = 0
+    start_frame = int(START_SECOND * fps)
+    live_start_time = time.monotonic()
 
     try:
+        recording_camera_id = camera_id or ("faydam1" if video.is_live else CAMERA_ID)
+        recording_capture_id = CAPTURE_ID
+        if video.is_live:
+            recording_capture_id = (
+                datetime.now(timezone.utc).strftime("live_%Y%m%dT%H%M%SZ")
+                + "_" + uuid4().hex[:8]
+            )
+            output_path = VIDEOS_DIR / recording_camera_id / f"{recording_capture_id}_tracked.mp4"
+            track_output_path = (
+                PROCESSED_DATA_DIR / recording_camera_id / recording_capture_id / "tracks_raw.parquet"
+            )
+            confirmed_track_output_path = track_output_path.with_name("tracks_confirmed.parquet")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not video.is_live:
+            total_frames = int(video.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            video.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            writer = cv2.VideoWriter(
+                str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps,
+                (video.info.width, video.info.height),
+            )
+            if not writer.isOpened():
+                raise RuntimeError(f"Could not create output video: {output_path}")
+
+        active_profile = tracker_profile
+        if active_profile == "auto":
+            active_profile = "recovery" if video.is_live else "baseline"
+        if active_profile == "recovery":
+            tracker = PersonTracker(
+                model_name=model_name,
+                confidence_threshold=0.1,
+                tracker_config=str(RECOVERY_TRACKER_CONFIG),
+            )
+        else:
+            tracker = PersonTracker(model_name=model_name)
+        if record_stream:
+            raw_output_path = output_path.with_name(f"{recording_capture_id}_raw.mkv")
+            recorder = StreamRecorder(str(source), raw_output_path)
+            print(f"Raw recording requested: {raw_output_path}")
+
+        # Live camera zones need their own calibration; never reuse Showroom polygons.
+        zone_manager = None if video.is_live else ZoneManager(recording_camera_id)
+
+        track_writer = TrackWriter(
+            track_output_path,
+            **({"confirmed_output_path": confirmed_track_output_path}
+               if confirmed_track_output_path is not None else {}),
+        )
+
+        customer_manager = CustomerStateManager(
+            min_observation_seconds=0.5,
+            min_displacement_pixels=10.0,
+            min_movement_frames=5,
+            movement_step_pixels=2.0,
+        )
+
+        paused = False
+        last_frame = None
+        frame_id = 0
+
+        print(f"Camera: {recording_camera_id}")
+        print(f"Capture: {recording_capture_id}")
+        print(f"FPS: {fps:.2f}")
+        print(f"Model: {model_name}")
+        print(f"Tracker profile: {active_profile}")
+        if video.is_live:
+            print("Live source")
+        else:
+            print(f"Duration: {total_frames / fps:.1f}s")
+
+        print()
+        print("Controls:")
+        print("  Space : Pause / Resume")
+        print("  Q     : Quit")
+        print()
+
         while True:
+            if recorder is not None and not recorder.running and not recorder_warning:
+                print("WARNING: Raw recording stopped; detection continues. Check camera/FFmpeg.")
+                recorder_warning = True
             if not paused:
                 frame_start_time = (
                     time.perf_counter()
                 )
 
-                success, frame = cap.read()
+                success, frame = video.read(timeout=0.1) if video.is_live else video.read()
 
                 if not success:
-                    break
+                    if not video.is_live:
+                        break
+                    # Keep GUI events responsive while waiting for reconnect.
+                    key = cv2.waitKey(100) & 0xFF
+                    if key == ord("q"):
+                        break
+                    if key == ord(" "):
+                        paused = True
+                    continue
 
-                frame_id = (
-                    int(
-                        cap.get(
-                            cv2.CAP_PROP_POS_FRAMES
+                if video.is_live:
+                    frame_id = video._last_read_id - 1
+                    timestamp = time.monotonic() - live_start_time
+                    if writer is None:
+                        fps = video.info.fps
+                        height, width = frame.shape[:2]
+                        writer = cv2.VideoWriter(
+                            str(output_path), cv2.VideoWriter_fourcc(*"mp4v"),
+                            fps, (width, height),
                         )
-                    )
-                    - 1
-                )
-
-                timestamp = (
-                    frame_id / fps
-                )
+                        if not writer.isOpened():
+                            raise RuntimeError(f"Could not create output video: {output_path}")
+                    elif frame.shape[:2] != (height, width):
+                        raise RuntimeError("Live resolution changed; restart recording")
+                else:
+                    frame_id = int(video.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+                    timestamp = frame_id / fps
 
                 tracks = tracker.track(
                     frame
@@ -177,10 +208,8 @@ def run_tracking_pipeline() -> None:
                     )
 
                     zone = (
-                        zone_manager.get_zone(
-                            track.ground_x,
-                            track.ground_y,
-                        )
+                        zone_manager.get_zone(track.ground_x, track.ground_y)
+                        if zone_manager is not None else None
                     )
 
                     state.update_zone(
@@ -189,8 +218,8 @@ def run_tracking_pipeline() -> None:
                     )
 
                     track_writer.add(
-                        camera_id=CAMERA_ID,
-                        capture_id=CAPTURE_ID,
+                        camera_id=recording_camera_id,
+                        capture_id=recording_capture_id,
                         frame_id=frame_id,
                         timestamp=timestamp,
                         track=track,
@@ -198,10 +227,12 @@ def run_tracking_pipeline() -> None:
                         zone=zone,
                     )
 
-                annotated_frame = draw_zones(
-                    frame=frame,
-                    zones=zone_manager.zones,
-                )
+                annotated_frame = frame
+                if not video.is_live:
+                    annotated_frame = draw_zones(
+                        frame=frame,
+                        zones=zone_manager.zones,
+                    )
 
                 annotated_frame = draw_tracks(
                     frame=annotated_frame,
@@ -211,6 +242,7 @@ def run_tracking_pipeline() -> None:
                     ),
                     timestamp=timestamp,
                     zone_manager=zone_manager,
+                    show_zone=not video.is_live,
                 )
 
                 cv2.putText(
@@ -234,7 +266,7 @@ def run_tracking_pipeline() -> None:
 
             if last_frame is not None:
                 cv2.imshow(
-                    f"Tracking - {CAMERA_ID}",
+                    f"Tracking - {recording_camera_id}",
                     last_frame,
                 )
 
@@ -285,9 +317,16 @@ def run_tracking_pipeline() -> None:
                 )
 
     finally:
-        cap.release()
-        writer.release()
-        cv2.destroyAllWindows()
+        try:
+            video.release()
+        finally:
+            try:
+                if recorder is not None:
+                    recorder.stop()
+            finally:
+                if writer is not None:
+                    writer.release()
+                cv2.destroyAllWindows()
 
     track_record_count = (
         track_writer.save(
@@ -352,7 +391,7 @@ def run_tracking_pipeline() -> None:
     print("-------")
 
     print(
-        f"Confirmed customers: "
+        f"Confirmed tracks: "
         f"{len(confirmed_states)}"
     )
 
@@ -370,11 +409,23 @@ def run_tracking_pipeline() -> None:
         f"{track_output_path.relative_to(PROJECT_ROOT)}"
     )
 
-    print(
-        "Video: "
-        f"{output_path.relative_to(PROJECT_ROOT)}"
-    )
+    if confirmed_track_output_path is not None:
+        print(f"Confirmed track data: {confirmed_track_output_path.relative_to(PROJECT_ROOT)}")
+        print(f"Confirmed track records: {track_writer.confirmed_record_count}")
+
+    if writer is not None:
+        print("Video: " f"{output_path.relative_to(PROJECT_ROOT)}")
 
 
 if __name__ == "__main__":
-    run_tracking_pipeline()
+    parser = argparse.ArgumentParser(description="Track a video file or live RTSP stream")
+    parser.add_argument("--source", help="Video file path or RTSP URL")
+    parser.add_argument("--camera-id", help="Camera name (live default: faydam1)")
+    parser.add_argument("--record-stream", action="store_true",
+                        help="Also record original RTSP video using FFmpeg stream copy")
+    parser.add_argument("--model", default="yolo11n.pt", help="YOLO model weights or local path")
+    parser.add_argument("--tracker-profile", choices=["auto", "baseline", "recovery"],
+                        default="auto", help="auto: recovery for live sources, baseline for files")
+    args = parser.parse_args()
+    run_tracking_pipeline(source=args.source, camera_id=args.camera_id,
+                          record_stream=args.record_stream, model_name=args.model, tracker_profile=args.tracker_profile)
