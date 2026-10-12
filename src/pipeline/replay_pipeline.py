@@ -1,22 +1,21 @@
 """Replay a local camera recording without a camera connection or embedded media."""
 import argparse
-from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
 import re
 from statistics import median
 import time
-from uuid import uuid4
 
 import cv2
 import pandas as pd
 
-from src.config.paths import ARTIFACTS_DIR
+from src.config.paths import SESSIONS_DIR
 from src.data.track_writer import TrackWriter
 from src.tracking.customer_state import CustomerStateManager
 from src.tracking.tracker import PersonTracker
 from src.video.source import VideoSource
+from src.video.session import make_session_id
 from src.visualization.draw import draw_tracks
 
 RECOVERY_CONFIG = Path(__file__).resolve().parents[1] / 'config' / 'trackers' / 'bytetrack_recovery.yaml'
@@ -26,7 +25,7 @@ def validate_exports(raw_path: Path, confirmed_path: Path) -> tuple[int, int, in
     raw = pd.read_parquet(raw_path)
     confirmed = pd.read_parquet(confirmed_path)
     keys = ['camera_id', 'capture_id', 'frame_id', 'local_track_id']
-    selected = raw[raw.final_customer_id.notna()]
+    selected = raw[raw.final_customer_id.notna() & raw.confirmed_at_frame]
     checks = [
         list(selected[keys].itertuples(index=False, name=None))
         == list(confirmed[keys].itertuples(index=False, name=None)),
@@ -50,6 +49,7 @@ def run_replay(
     stride: int = 3,
     save_video: bool = False,
     max_frames: int = None,
+    session_name: str = None,
 ) -> dict:
     source = Path(source).resolve()
     if not source.is_file():
@@ -60,8 +60,8 @@ def run_replay(
         raise ValueError('tracker_profile must be baseline or recovery')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', camera_id):
         raise ValueError('Invalid camera_id')
-    capture_id = datetime.now(timezone.utc).strftime('replay_%Y%m%dT%H%M%SZ') + '_' + uuid4().hex[:8]
-    output = Path(output_dir) if output_dir is not None else ARTIFACTS_DIR / 'replay' / camera_id / capture_id
+    capture_id = make_session_id(camera_id, 'replay', session_name)
+    output = Path(output_dir) if output_dir is not None else SESSIONS_DIR / camera_id / capture_id
     if output.exists():
         raise FileExistsError(f'Choose a new output directory: {output}')
     video = VideoSource(source)
@@ -79,8 +79,9 @@ def run_replay(
         )
         manager = CustomerStateManager(min_observation_seconds=.5, min_displacement_pixels=10,
                                        min_movement_frames=5, movement_step_pixels=2)
-        exporter = TrackWriter(output / 'tracks_raw.parquet',
-                               confirmed_output_path=output / 'tracks_confirmed.parquet')
+        raw_path = output / f'{capture_id}_all_tracks_debug.parquet'
+        confirmed_path = output / f'{capture_id}_confirmed_tracks.parquet'
+        exporter = TrackWriter(raw_path, confirmed_output_path=confirmed_path, confirmed_frames_only=True)
         index = processed = empty = 0
         first_pts = None
         last_time = 0.0
@@ -114,7 +115,7 @@ def run_replay(
             if save_video:
                 if writer is None:
                     height, width = frame.shape[:2]
-                    writer = cv2.VideoWriter(str(output / 'tracked_preview.mp4'),
+                    writer = cv2.VideoWriter(str(output / f'{capture_id}_annotated.mp4'),
                                              cv2.VideoWriter_fourcc(*'mp4v'), sampled_fps, (width, height))
                     if not writer.isOpened():
                         raise RuntimeError('Could not create annotated replay video')
@@ -131,13 +132,14 @@ def run_replay(
                 break
         exporter.save(manager.states)
         raw_rows, confirmed_rows, post_confirmation_rows = validate_exports(
-            output / 'tracks_raw.parquet', output / 'tracks_confirmed.parquet')
+            raw_path, confirmed_path)
         summary = {
             'source_name': source.name, 'camera_id': camera_id, 'capture_id': capture_id,
             'model': Path(model_name).name, 'tracker_profile': tracker_profile,
             'source_frames_read': index, 'frames_processed': processed, 'frame_stride': stride,
             'sample_fps': sampled_fps, 'last_media_timestamp': last_time, 'stop_reason': stop_reason,
-            'raw_rows': raw_rows, 'confirmed_history_rows': confirmed_rows,
+            'raw_rows': raw_rows, 'confirmed_rows': confirmed_rows,
+            'confirmed_track_history_rows': int(pd.read_parquet(raw_path).final_customer_id.notna().sum()),
             'post_confirmation_rows': post_confirmation_rows, 'sampled_frames_without_tracks': empty,
             'track_ids': len(manager.states),
             'confirmed_track_ids': sum(state.confirmed for state in manager.states.values()),
@@ -155,7 +157,7 @@ def run_replay(
                             'Observation spans include gaps'],
         }
         (output / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False))
-        print(f'Raw observations: {raw_rows}; confirmed histories: {confirmed_rows}')
+        print(f'Raw observations: {raw_rows}; confirmed rows: {confirmed_rows}')
         print(f'Confirmed tracks: {summary["confirmed_track_ids"]}')
         print(f'Outputs: {output}')
         return summary
@@ -177,10 +179,11 @@ def main():
     parser.add_argument('--stride', type=int, default=3)
     parser.add_argument('--max-frames', type=int, help='Optional limit on processed frames')
     parser.add_argument('--save-video', action='store_true', help='Also save a local annotated video')
+    parser.add_argument('--session-name', help='Optional readable recording label')
     args = parser.parse_args()
     run_replay(args.source, args.output_dir, camera_id=args.camera_id, model_name=args.model,
                tracker_profile=args.tracker_profile, stride=args.stride,
-               max_frames=args.max_frames, save_video=args.save_video)
+               max_frames=args.max_frames, save_video=args.save_video, session_name=args.session_name)
 
 
 if __name__ == '__main__':

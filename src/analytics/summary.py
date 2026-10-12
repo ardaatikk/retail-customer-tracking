@@ -62,6 +62,8 @@ def calculate_customer_summary(
             customer_data["timestamp"].min()
         )
 
+        if "first_seen" in customer_data and customer_data["first_seen"].notna().any():
+            first_seen = min(first_seen, float(customer_data["first_seen"].min()))
         last_seen = float(
             customer_data["timestamp"].max()
         )

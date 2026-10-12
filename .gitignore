@@ -90,3 +90,7 @@ artifacts/replay/
 !src/config/reference_frames/Showroom.jpg
 !artifacts/figures/capture1_Showroom_trajectory.png
 !artifacts/figures/capture1_Showroom_heatmap.png
+
+# Camera session bundles and local pre-migration archives
+artifacts/sessions/
+artifacts/session_archive/

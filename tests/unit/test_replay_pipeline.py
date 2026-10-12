@@ -57,11 +57,13 @@ def test_default_writes_tables_without_camera_media(prepared, tmp_path, monkeypa
     result = replay.run_replay(source, output, stride=1)
     assert video.released
     assert result['confirmed_track_ids'] == 1
-    assert result['raw_rows'] == result['confirmed_history_rows'] == 8
+    assert result['raw_rows'] == result['confirmed_track_history_rows'] == 8
     assert result['post_confirmation_rows'] < result['raw_rows']
     assert result['source_name'] == source.name
     assert not result['video_saved']
-    assert sorted(p.name for p in output.iterdir()) == ['summary.json','tracks_confirmed.parquet','tracks_raw.parquet']
+    assert sorted(p.name for p in output.iterdir()) == sorted(['summary.json', result['capture_id']+'_confirmed_tracks.parquet', result['capture_id']+'_all_tracks_debug.parquet'])
+    assert result['confirmed_rows'] == result['post_confirmation_rows']
+    assert pd.read_parquet(output/(result['capture_id']+'_confirmed_tracks.parquet')).confirmed_at_frame.all()
     assert factory.call_args.kwargs['confidence_threshold'] == .1
 
 
@@ -86,7 +88,7 @@ def test_empty_recording_writes_empty_tables(prepared,tmp_path):
     result = replay.run_replay(source,tmp_path/'run')
     assert result['frames_processed'] == 0
     assert result['median_tracker_ms'] is None
-    assert pd.read_parquet(tmp_path/'run/tracks_confirmed.parquet').empty
+    assert pd.read_parquet(tmp_path/'run'/(result['capture_id']+'_confirmed_tracks.parquet')).empty
     assert video.released
 
 
