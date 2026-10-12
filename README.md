@@ -4,12 +4,12 @@
 [![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![YOLO11](https://img.shields.io/badge/YOLO11-Ultralytics-blueviolet)](https://docs.ultralytics.com/models/yolo11/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green?logo=opencv&logoColor=white)](https://opencv.org/)
-[![Tests](https://img.shields.io/badge/Tests-44%20Passed-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-115%20Passed-brightgreen)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 An end-to-end computer vision pipeline for tracking customers in indoor environments and transforming raw video into interpretable behavioral analytics.
 
-The current implementation provides **single-camera customer tracking**, zone-based behavior analysis, dwell-time measurement, trajectory reconstruction, and occupancy heatmaps. The architecture is designed to be extended toward **multi-camera identity association and global customer analytics**.
+The project supports **single-camera tracking from video files and live RTSP streams**. The CITIC-MTMC Showroom workflow includes zone analysis, trajectory reconstruction, and occupancy heatmaps. Live camera sessions add reconnect handling, optional original-stream recording, and separate raw/confirmed track exports. Multi-camera identity association remains a planned extension.
 
 ---
 
@@ -17,8 +17,8 @@ The current implementation provides **single-camera customer tracking**, zone-ba
 
 Traditional object detection can answer **where a person is in a frame**. This project extends that idea into a temporal analytics system capable of answering questions such as:
 
-- How many customers were observed?
-- How long did each customer remain visible?
+- How many local tracks were confirmed?
+- What was each track's first-to-last observation span?
 - Which areas did they visit?
 - How much time was spent in each zone?
 - What path did each customer follow?
@@ -30,9 +30,14 @@ The pipeline combines pretrained person detection, multi-object tracking, custom
 
 ## Features
 
-- Person detection using **pretrained YOLO11n**
+- Person detection using **pretrained YOLO11n**, with selectable YOLO weights
+- RTSP latest-frame capture, bounded reads, and automatic reconnect
+- Camera and session-specific output directories
+- Optional original RTSP stream recording with FFmpeg
+- Separate raw and confirmed track histories for live sessions
+- Selectable baseline and recovery ByteTrack profiles
 - Multi-object tracking using **ByteTrack**
-- Persistent local track IDs
+- Local track IDs maintained while matching succeeds
 - Customer confirmation to reduce short-lived false detections
 - Ground-point estimation from person bounding boxes
 - Camera-specific polygonal zones
@@ -44,21 +49,21 @@ The pipeline combines pretrained person detection, multi-object tracking, custom
 - Per-zone analytics
 - Parquet-based structured outputs
 - Reproducible CITIC-MTMC dataset download
-- Automated unit testing with **44 tests**
+- Automated unit testing with **115 tests**
 - GitHub Actions continuous integration
 - Architecture prepared for future multi-camera tracking
 
-> The detector is **not fine-tuned** in the current version. The pipeline uses pretrained YOLO11n weights and restricts detection to the person class.
+> The detector is **not fine-tuned**. YOLO11n is the default; YOLO11s can also be selected. Detection is restricted to the person class. Confirmed track IDs do not establish unique-person identity across tracking losses or camera views.
 
 ---
 
 ## System Architecture
 
 ```text
-                    Video
+              Video File / RTSP
                       │
                       ▼
-             Pretrained YOLO11n
+             Pretrained YOLO11
               Person Detection
                       │
                       ▼
@@ -110,7 +115,7 @@ For the current `capture1 / Showroom` experiment:
 
 | Metric | Result |
 |---|---:|
-| Confirmed customers | 2 |
+| Confirmed tracks | 2 |
 | Confirmed track points | 944 |
 | Spatial analytics points | 696 |
 | Bottom-truncated points excluded from spatial analytics | 248 |
@@ -191,7 +196,22 @@ Main dependencies include:
 - LAP
 - Pytest
 
-YOLO11n weights are not stored in the repository.
+Model weights are not stored in the repository. If a named model such as `yolo11n.pt` or `yolo11s.pt` is missing locally, Ultralytics may download it on first use. A local weights path can also be passed with `--model`.
+
+### 4. Optional: install FFmpeg for original-stream recording
+
+FFmpeg is required only for `--record-stream`; ordinary detection/tracking and annotated MP4 recording use OpenCV.
+
+On macOS with Homebrew:
+
+```bash
+brew install ffmpeg
+ffmpeg -version
+```
+
+For other platforms, install FFmpeg using the [official download options](https://ffmpeg.org/download.html) and make sure the `ffmpeg` executable is available on `PATH`.
+
+The CITIC-MTMC dataset and Showroom zone setup below are needed for the dataset example. Live RTSP tracking does not require downloading the dataset.
 
 ---
 
@@ -247,7 +267,7 @@ The Showroom configuration defines three behavioral areas:
 - **Main Area**
 - **Demo Area**
 
-The tracking pipeline automatically loads this configuration and assigns each confirmed customer's ground point to the corresponding zone.
+The video-file workflow loads this configuration and assigns track ground points to zones. **Live RTSP sessions do not load the Showroom polygons**: zone analysis is disabled and exported `zone` values are null. Renaming a live camera does not calibrate its zones.
 
 For a new camera view, zones can be created interactively using:
 
@@ -265,9 +285,9 @@ This camera-specific configuration approach also allows additional zone files to
 
 ## Running the Pipeline
 
-### 1. Customer Tracking
+### 1. Dataset Video Tracking
 
-Run the tracking pipeline:
+Run the existing `capture1/Showroom.mp4` example:
 
 ```bash
 python -m src.pipeline.tracking_pipeline
@@ -314,7 +334,7 @@ Generated videos and processed datasets are excluded from Git.
 
 ### 2. Analytics
 
-After tracking is complete:
+After the **Showroom dataset video** has been processed:
 
 ```bash
 python -m src.pipeline.analytics_pipeline
@@ -329,6 +349,174 @@ artifacts/figures/capture1_Showroom_heatmap.png
 data/processed/customer_summary.parquet
 data/processed/zone_summary.parquet
 ```
+
+---
+
+## Live RTSP Tracking
+
+Run a single camera with the lightweight model and recovery profile:
+
+```bash
+python -m src.pipeline.tracking_pipeline \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
+  --camera-id faydam1 \
+  --model yolo11n.pt \
+  --tracker-profile recovery
+```
+
+Replace the placeholder URL with the camera's actual RTSP endpoint. Commands are run from the repository root with the Python environment activated.
+
+| Option | Behavior |
+|---|---|
+| `--source` | Video path or RTSP URL. Omitted: the original Showroom dataset video. |
+| `--camera-id` | Output camera label. Live default: `faydam1`; file default: `Showroom`. |
+| `--model` | Named YOLO weights or local weights path. Default: `yolo11n.pt`. |
+| `--tracker-profile` | `auto`, `baseline`, or `recovery`. `auto` selects recovery for live sources and baseline for files. |
+| `--record-stream` | Also record the original RTSP video to MKV using FFmpeg stream copy. |
+
+**Controls:** Space pauses/resumes processing; Q exits normally and saves the track tables. While processing is paused, live capture continues reading the camera; an enabled original-stream recording also continues.
+
+### Capture and recovery
+
+The background reader retains one latest frame. A slow consumer skips intermediate frames instead of accumulating a processing backlog. RTSP uses the FFmpeg backend with TCP transport and open/read timeouts. A failed RTSP read invalidates the stored frame and triggers repeated connection attempts. Consumer timeouts are retried by the pipeline.
+
+Frame IDs remain monotonic across reconnects. This does not guarantee that the person's tracker ID survives a network outage. The reconnect implementation is covered by fake-capture tests; a real camera disconnect/recovery test has not yet been completed.
+
+### Model choice
+
+Both models use pretrained weights; this project has not added camera-specific training.
+
+| Model | Findings from the development recording |
+|---|---|
+| `yolo11n.pt` | Lightweight default retained for live use; some difficult walking frames were missed. |
+| `yolo11s.pt` | Detected a person in some frames missed by nano and reduced some coat-rack detections, but took longer to process. A live trial showed worse green-box continuity, so it remains an optional comparison model. |
+
+These are observations from one recording and live trial, not a general accuracy benchmark. Better detection on individual frames does not guarantee better live tracking when fewer frames can be processed.
+
+To compare small without running an additional detector:
+
+```bash
+python -m src.pipeline.tracking_pipeline \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
+  --camera-id faydam1 \
+  --model yolo11s.pt \
+  --tracker-profile recovery
+```
+
+Only one YOLO model runs in the tracking pipeline. The previous debug-detections mode has been removed.
+
+### Recovery profile
+
+The tested configuration is stored in `src/config/trackers/bytetrack_recovery.yaml`:
+
+| Setting | Value |
+|---|---:|
+| Detector confidence threshold | 0.10 |
+| `track_high_thresh` | 0.50 |
+| `track_low_thresh` | 0.10 |
+| `new_track_thresh` | 0.60 |
+| `track_buffer` | 30 |
+| `match_thresh` | 0.85 |
+| `fuse_score` | true |
+
+Low-confidence detections can help continue an existing track, while creating a new track requires a stronger detection. The profile improved ID continuity in sampled replay tests; very low processing rates still caused losses. This profile is not a guarantee against false positives or ID changes. Parameter meanings are described in the [Ultralytics tracking documentation](https://docs.ultralytics.com/modes/track/).
+
+Use `--tracker-profile baseline` to restore the original tracking settings. Customer confirmation is a separate step and still applies its observation, movement, and average-confidence requirements.
+
+### Session outputs
+
+Each live run receives a UTC timestamp and random suffix in its session ID, so new live sessions do not overwrite earlier runs:
+
+```text
+data/processed/faydam1/<session>/
+├── tracks_raw.parquet
+└── tracks_confirmed.parquet
+
+artifacts/videos/faydam1/
+├── <session>_tracked.mp4
+└── <session>_raw.mkv       # only with --record-stream
+```
+
+The annotated MP4 contains the processed frames, green boxes for confirmed tracks, person labels, and elapsed time. It is written at the camera FPS. If processing skips frames, parts of this video can play faster than real time.
+
+For an original recording independent of detection's frame skipping, add:
+
+```bash
+python -m src.pipeline.tracking_pipeline \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
+  --camera-id faydam1 \
+  --model yolo11n.pt \
+  --tracker-profile recovery \
+  --record-stream
+```
+
+FFmpeg opens a second RTSP connection and copies the compressed video stream without re-encoding it. The MKV contains no detection boxes and uses the source timestamps. Camera/network failures can still interrupt it. Additional network and disk activity can affect performance.
+
+If original-stream recording stops, the pipeline prints a warning and detection continues. That recorder does not reconnect automatically. Use Q to close it normally. A compatible player is needed for MKV; convert a completed recording to MP4 without re-encoding if required:
+
+```bash
+ffmpeg -i path/to/session_raw.mkv -map 0:v:0 -c:v copy \
+  -movflags +faststart path/to/session_raw.mp4
+```
+
+### Raw and confirmed Parquet tables
+
+`tracks_raw.parquet` contains every observation returned by the tracker, including unconfirmed tracks. `tracks_confirmed.parquet` contains the complete histories of tracks that were confirmed by the end of the session. Pre-confirmation rows are retained so first-seen times are not lost.
+
+Both tables retain camera/session/frame/track identifiers, timestamps, bounding-box coordinates, ground points, confidence, and zone. Additional fields distinguish the confirmation stages:
+
+| Field | Meaning |
+|---|---|
+| `customer_id` | Raw: ID assigned at observation time, otherwise null. Confirmed history: final assigned ID on all rows. |
+| `confirmed_at_frame` | Whether that track was already confirmed at this observation. |
+| `confirmed_at` | Session time in seconds when the track was confirmed; null if it never was. |
+| `final_customer_id` | ID assigned by session end; null for tracks that remain unconfirmed. |
+
+Compare tables using `camera_id`, `capture_id`, `local_track_id`, and `frame_id`. To analyze only observations after confirmation, filter `confirmed_at_frame == True`. Raw and confirmed histories can have equal row counts if all tracks eventually become confirmed.
+
+An observation is added only when the tracker returns a track. Frames with no tracks and network timeouts do not produce event rows. Empty sessions produce two empty live-session tables; sessions without confirmations produce an empty confirmed table.
+
+Track rows accumulate in memory and are saved on normal exit. An abrupt process termination can lose these rows. The existing file workflow still writes the original `data/processed/tracks.parquet` output.
+
+### Analyze a live-session export
+
+Select the confirmed history file and its camera/session:
+
+```bash
+python -m src.pipeline.analytics_pipeline \
+  --tracks data/processed/faydam1/SESSION_ID/tracks_confirmed.parquet \
+  --camera-id faydam1 \
+  --capture-id SESSION_ID
+```
+
+Replace `SESSION_ID` with the actual directory/session ID. Camera and capture IDs can be omitted when the input contains exactly one camera/session. An ambiguous input requires explicit selection; local person IDs from different sessions are not merged.
+
+| Analytics option | Behavior |
+|---|---|
+| `--tracks` | Input Parquet. Omitted: the original Showroom `tracks.parquet` workflow. |
+| `--camera-id` | Select one camera. Inferred for a single-session custom input. |
+| `--capture-id` | Select one capture/session. Inferred for a single-session custom input. |
+| `--output-dir` | Where summaries and optional figures are written. Custom input default: an `analytics/` directory beside the input. |
+| `--reference-frame` | Same-camera image at the original recorded resolution, enabling spatial plots for custom inputs. |
+
+For custom inputs, `customer_summary.parquet` reports each confirmed track's first/last times and observation span. `zone_summary.parquet` is generated only when the selected observations contain zone assignments. A zone-free RTSP session prints a skipped message.
+
+Custom inputs do not use the Showroom background. Without `--reference-frame`, trajectory and heatmap are skipped while the track summary is still produced. With a matching reference image, both figures can be generated without a zone configuration:
+
+```bash
+python -m src.pipeline.analytics_pipeline \
+  --tracks data/processed/faydam1/SESSION_ID/tracks_confirmed.parquet \
+  --camera-id faydam1 \
+  --capture-id SESSION_ID \
+  --reference-frame path/to/faydam1_reference.png \
+  --output-dir artifacts/analytics/faydam1/SESSION_ID
+```
+
+Ground points use original image pixels; a resized or different-camera reference is unsuitable. A matching camera-specific zone configuration, if present, is used for figure overlays and dimension checks; it does not recompute missing zone values in the Parquet input.
+
+Raw split exports are also accepted: their `final_customer_id` selects confirmed histories while retaining pre-confirmation observations. Tracks that remain unconfirmed are excluded. Prefer the confirmed file for ordinary analytics. Missing selections, mixed unresolved sessions, and inputs without confirmed tracks are reported as errors.
+
+Custom output files use `customer_summary.parquet`, optional `zone_summary.parquet`, `trajectory.png`, and `heatmap.png`. Reusing an output directory can overwrite files generated by the current run; files for skipped reports are not deleted. Use separate directories for separate comparisons.
 
 ---
 
@@ -364,7 +552,11 @@ A track must satisfy multiple conditions before being confirmed, including:
 
 This helps suppress short-lived false detections and static objects incorrectly detected as people.
 
-Once confirmed, the track receives a sequential customer identifier while preserving its original `local_track_id`.
+Once confirmed, the track receives a sequential customer identifier while preserving its original `local_track_id`. Its `confirmed_at` timestamp is recorded once.
+
+Current confirmation requires at least 0.5 seconds of observation, 10 pixels of maximum displacement, five movement observations with steps of at least 2 pixels, and average confidence of at least 0.50. A stationary person may therefore remain unconfirmed even when detected.
+
+The displayed store time and final observed time represent an elapsed span from first observation, not the sum of continuously visible intervals. Tracking losses and pauses can contribute to that span. `Confirmed tracks` counts accepted local tracks, not verified unique people.
 
 ---
 
@@ -379,7 +571,7 @@ pytest -q
 Current test suite:
 
 ```text
-44 passed
+115 passed
 ```
 
 Tests cover:
@@ -393,8 +585,78 @@ Tests cover:
 - Dataset validation
 - Parquet track persistence
 - Detector behavior with mocked YOLO inference
+- Latest-frame skipping and duplicate-frame prevention
+- RTSP reconnect, stale-frame invalidation, timeouts, and shutdown with fake captures
+- Independent stream-recording process lifecycle with mocked FFmpeg
+- Live/file pipeline behavior and model/profile selection
+- Raw/confirmed Parquet consistency and confirmation timestamps
+- Analytics camera/session selection, ID reuse isolation, raw history selection, and zone-free output
+- Offline replay outputs, native video dimensions, frame sampling, timestamps, and safe cleanup with synthetic frames
 
-Network access and real model inference are not required by the unit tests.
+Network access, a camera, FFmpeg, and real model inference are not required by the unit tests. The 115-test result was verified locally on 12 October 2026; this RTSP branch has not yet run on GitHub CI.
+
+### Manual camera checks
+
+These tools run only when invoked explicitly and are not discovered as pytest tests:
+
+```bash
+python tests/integration/rtsp_latest_frame_check.py \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
+  --iterations 20 --processing-delay 0.1
+
+python tests/integration/rtsp_reconnect_check.py \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH"
+```
+
+The latest-frame check is a short live-stream inspection, not a camera-to-display latency measurement. The reconnect check keeps requesting frames during an outage; interrupt it with Ctrl+C. A portable replay tool accepts your own local recording. No private camera recording is included or needed by CI.
+
+### Recorded-camera replay
+
+Run from the repository root with local YOLO weights available:
+
+```bash
+python -m src.pipeline.replay_pipeline \
+  --source /path/to/local_recording.mkv \
+  --camera-id camera1 \
+  --model yolo11n.pt \
+  --tracker-profile recovery \
+  --stride 3
+```
+
+The manual integration wrapper provides the same interface:
+
+```bash
+python tests/integration/recorded_camera_check.py \
+  --source /path/to/local_recording.mkv --camera-id camera1 --stride 3
+```
+
+This is a local video replay, not a live camera connection. A stride of 3 processes every third source frame: about 8 observations per second for a 24 FPS recording. `--max-frames 80` limits the run to 80 processed frames. Use `--tracker-profile baseline` or `--model yolo11s.pt` for a separate comparison run; only one model runs at a time. Recorded replay does not test network reconnect or variable live processing delays.
+
+Each run writes to a new `artifacts/replay/<camera>/<session>/` directory by default:
+
+```text
+tracks_raw.parquet
+tracks_confirmed.parquet
+summary.json
+tracked_preview.mp4       # only when --save-video is supplied
+```
+
+Use `--output-dir /path/to/new_output_directory` to choose another local destination. Existing destinations are rejected rather than overwritten. Parquet export consistency is checked before the run is reported as successful. The summary includes processed-frame counts, confirmation times and first-to-last track spans; it records source/model filenames rather than absolute local paths.
+
+Video generation is opt-in with `--save-video`. The output preserves the source frame dimensions and writes at the sampled FPS, so processing speed does not accelerate it. Irregular source timestamps can still differ from a constant-FPS preview. MP4 playback support depends on the OpenCV codec; convert a completed preview to H.264 if needed:
+
+```bash
+ffmpeg -i path/to/tracked_preview.mp4 -c:v libx264 \
+  -pix_fmt yuv420p -movflags +faststart path/to/replay_h264.mp4
+```
+
+No zone overlay is used in replay. Stationary people may remain unconfirmed under the existing movement requirements. Observation spans include gaps; confirmed IDs are not verified unique people.
+
+### Camera media and repository contents
+
+Private camera recordings and screenshots stay local and are not used in README examples or included with tests. Common video/image extensions and default replay outputs are ignored by Git. The included Showroom reference image and analytics figures are public CITIC-MTMC examples and remain included.
+
+Parquet tables are not covered by the private-image restriction. Generated data stays ignored under the existing raw/processed-data and replay-output rules; any selected publishable data example should be reviewed separately. CI tests use synthetic frames and mocked inference, with no real camera image or video fixture.
 
 ---
 
@@ -428,10 +690,13 @@ retail-customer-tracking/
 │   └── raw/
 ├── src/
 │   ├── analytics/
+│   │   ├── input.py
 │   │   ├── heatmap.py
 │   │   ├── summary.py
 │   │   └── trajectory.py
 │   ├── config/
+│   │   ├── trackers/
+│   │   │   └── bytetrack_recovery.yaml
 │   │   ├── reference_frames/
 │   │   ├── zones/
 │   │   ├── paths.py
@@ -444,16 +709,24 @@ retail-customer-tracking/
 │   │   └── detector.py
 │   ├── pipeline/
 │   │   ├── analytics_pipeline.py
+│   │   ├── replay_pipeline.py
 │   │   └── tracking_pipeline.py
 │   ├── tracking/
 │   │   ├── customer_state.py
 │   │   └── tracker.py
+│   ├── video/
+│   │   ├── source.py
+│   │   └── recorder.py
 │   ├── visualization/
 │   │   └── draw.py
 │   └── zones/
 │       ├── configure.py
 │       └── zone_manager.py
 ├── tests/
+│   ├── integration/
+│   │   ├── recorded_camera_check.py
+│   │   ├── rtsp_latest_frame_check.py
+│   │   └── rtsp_reconnect_check.py
 │   └── unit/
 ├── .gitignore
 ├── LICENSE
@@ -468,7 +741,7 @@ retail-customer-tracking/
 
 ### Pretrained Detection
 
-YOLO11n is used as a pretrained person detector rather than being trained specifically for this dataset.
+YOLO11n is the default pretrained detector. YOLO11s or local compatible detection weights can be selected with `--model`; no domain-specific fine-tuning is included.
 
 This keeps the current project focused on tracking, behavioral analytics, and system design. Domain-specific detector fine-tuning can be introduced later if real deployment footage reveals significant detection limitations.
 
@@ -494,7 +767,7 @@ Analytics modules are designed to consume structured tracking records rather tha
 
 ## Multi-Camera Roadmap
 
-The current version provides a complete single-camera analytics pipeline.
+The Showroom video-file workflow provides single-camera analytics. Live RTSP capture, tracking, and session exports are also available. The analytics CLI accepts their confirmed histories; spatial plots require a reference frame from the selected camera.
 
 The next development milestone is multi-camera customer tracking using the remaining CITIC-MTMC camera views.
 
@@ -536,9 +809,15 @@ The current implementation has several intentional limitations:
 - Tracking is currently performed on a single camera.
 - Customer IDs are session-level identifiers, not cross-camera identities.
 - YOLO11n uses pretrained weights without domain-specific fine-tuning.
-- Store time represents the observed duration within the current camera rather than the customer's complete visit duration.
+- Store time is the first-to-last observation span within the current camera; it can include gaps and is not continuous visible time or complete visit duration.
 - Ground position is approximated from the bottom-center of the bounding box rather than projected into a calibrated world coordinate system.
-- Zone definitions are manually configured per camera.
+- Zone definitions are manually configured per camera; live RTSP zone analysis is currently disabled.
+- A lost/recreated track can assign a new customer ID to the same person.
+- Low processing FPS can break ID continuity even with recovery settings.
+- Annotated live MP4 recordings can appear accelerated when intermediate frames are skipped.
+- Track tables are written on normal exit, not periodically during a session.
+- Original-stream recording requires FFmpeg and does not reconnect automatically.
+- The analytics command defaults to the original Showroom example; live sessions must be selected explicitly with `--tracks`.
 - Heatmaps represent accumulated observed presence rather than unique-person density.
 
 These limitations define the next stages of development rather than being hidden assumptions of the system.

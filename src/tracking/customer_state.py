@@ -25,6 +25,7 @@ class CustomerState:
 
     confirmed: bool = False
     customer_id: int | None = None
+    confirmed_at: float | None = None
     
     current_zone: str | None = None
     zone_entered_at: float | None = None
@@ -267,6 +268,7 @@ class CustomerStateManager:
                 and enough_confidence
             ):
                 state.confirmed = True
+                state.confirmed_at = timestamp
 
                 state.customer_id = (
                     self.next_customer_id

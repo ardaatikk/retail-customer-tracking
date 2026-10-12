@@ -50,6 +50,7 @@ def draw_tracks(
     customer_states: dict,
     timestamp: float,
     zone_manager,
+    show_zone: bool = True,
 ) -> np.ndarray:
     output = frame.copy()
 
@@ -85,22 +86,11 @@ def draw_tracks(
         minutes = elapsed_seconds // 60
         seconds = elapsed_seconds % 60
 
-        zone = zone_manager.get_zone(
-            track.ground_x,
-            track.ground_y,
-        )
-
-        zone_name = (
-            zone
-            if zone is not None
-            else "Outside"
-        )
-
-        label = (
-            f"Person #{state.customer_id} "
-            f"Zone: {zone_name} | "
-            f"Store Time {minutes:02d}:{seconds:02d}"
-        )
+        label = f"Person #{state.customer_id} "
+        if show_zone:
+            zone = zone_manager.get_zone(track.ground_x, track.ground_y)
+            label += f"Zone: {zone if zone is not None else 'Outside'} | "
+        label += f"Store Time {minutes:02d}:{seconds:02d}"
 
         cv2.putText(
             output,
