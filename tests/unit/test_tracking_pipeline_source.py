@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
 import pytest
@@ -36,6 +37,7 @@ class FakeVideo:
 def setup(monkeypatch, tmp_path):
     calls = SimpleNamespace(frames=[], records=[], writers=[], paths=[], video_paths=[], confirmed_paths=[], zones=[], saved=False, destroyed=False)
     monkeypatch.setattr(pipeline, 'VIDEOS_DIR', tmp_path)
+    monkeypatch.setattr(pipeline, 'SESSIONS_DIR', tmp_path)
     monkeypatch.setattr(pipeline, 'PROCESSED_DATA_DIR', tmp_path)
     monkeypatch.setattr(pipeline, 'PROJECT_ROOT', tmp_path)
     monkeypatch.setattr(pipeline, 'PersonTracker', lambda **kw: SimpleNamespace(
@@ -80,13 +82,14 @@ def test_live_timeout_recovers_without_processing_stale_frame(monkeypatch, setup
     assert len(setup.frames) == 1
     assert setup.records[0]['timestamp'] == 5.0
     assert setup.records[0]['camera_id'] == 'live1'
-    assert setup.records[0]['capture_id'].startswith('live_')
+    assert setup.records[0]['capture_id'].startswith('live1_live_')
     assert setup.records[0]['zone'] is None
     assert not setup.zones
     assert setup.paths[0].parent.parent.name == 'live1'
-    assert setup.paths[0].name == 'tracks_raw.parquet'
-    assert setup.confirmed_paths[0] == setup.paths[0].with_name('tracks_confirmed.parquet')
+    assert setup.paths[0].name.endswith('_all_tracks_debug.parquet')
+    assert setup.confirmed_paths[0] == setup.paths[0].with_name(setup.records[0]['capture_id'] + '_confirmed_tracks.parquet')
     assert '/live1/' in setup.video_paths[0]
+    assert Path(setup.video_paths[0]).parent == setup.paths[0].parent
     assert video.seek is None
     assert video.released and setup.writers[0].released and setup.destroyed
 
@@ -104,8 +107,11 @@ def test_file_eof_and_seek_are_preserved(monkeypatch, setup):
     assert setup.records[0]['camera_id'] == 'Showroom'
     assert setup.records[0]['capture_id'] == 'capture1'
     assert setup.zones == ['Showroom']
-    assert setup.paths[0].name == 'tracks.parquet'
-    assert setup.confirmed_paths[0] is None
+    assert setup.paths[0].name.startswith('Showroom_file_')
+    assert setup.paths[0].name.endswith('_all_tracks_debug.parquet')
+    assert setup.confirmed_paths[0].name.endswith('_confirmed_tracks.parquet')
+    assert setup.paths[0].parent == setup.confirmed_paths[0].parent
+    assert setup.paths[0].parent.parent.name == 'Showroom'
     assert video.released and setup.writers[0].released
 
 
@@ -130,6 +136,8 @@ def test_model_initialization_failure_releases_resources(monkeypatch, setup):
 
 
 def test_custom_live_camera_and_distinct_sessions(monkeypatch, setup):
+    ids = iter(['live2_live_2026-10-12_16-00-00', 'live2_live_2026-10-12_16-00-01'])
+    monkeypatch.setattr(pipeline, 'make_session_id', lambda *args: next(ids))
     for _ in range(2):
         frame = np.zeros((3, 4, 3), dtype=np.uint8)
         video = FakeVideo(True, [(True, frame)])
@@ -157,7 +165,7 @@ def test_independent_recorder_stops_on_quit(monkeypatch, setup):
     monkeypatch.setattr(pipeline, 'StreamRecorder', factory)
     monkeypatch.setattr(pipeline.cv2, 'waitKey', lambda delay: ord('q'))
     pipeline.run_tracking_pipeline('rtsp://fake/live', record_stream=True)
-    assert factory.call_args.args[1].name.endswith('_raw.mkv')
+    assert factory.call_args.args[1].name.endswith('_original.mkv')
     recorder.stop.assert_called_once()
     assert video.released
 
@@ -215,3 +223,19 @@ def test_tracker_profile_selection(monkeypatch, setup, is_live, profile, expecte
 def test_invalid_tracker_profile():
     with pytest.raises(ValueError, match='tracker_profile'):
         pipeline.run_tracking_pipeline(tracker_profile='unknown')
+
+
+def test_existing_session_is_not_overwritten(monkeypatch, setup, tmp_path):
+    session = 'live2_live_2026-10-12_16-00-00'
+    folder = tmp_path / 'live2' / session
+    folder.mkdir(parents=True)
+    sentinel = folder / 'existing.txt'
+    sentinel.write_text('keep')
+    video = FakeVideo(True, [])
+    monkeypatch.setattr(pipeline, 'VideoSource', lambda source: video)
+    monkeypatch.setattr(pipeline, 'make_session_id', lambda *args: session)
+    with pytest.raises(FileExistsError):
+        pipeline.run_tracking_pipeline('rtsp://fake/live', camera_id='live2')
+    assert sentinel.read_text() == 'keep'
+    assert video.released
+    assert not setup.video_paths

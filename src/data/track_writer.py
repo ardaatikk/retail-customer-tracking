@@ -12,9 +12,11 @@ class TrackWriter:
         output_path: Path,
         *,
         confirmed_output_path: Path | None = None,
+        confirmed_frames_only: bool = False,
     ) -> None:
         self.output_path = output_path
         self.confirmed_output_path = confirmed_output_path
+        self.confirmed_frames_only = confirmed_frames_only
         if confirmed_output_path is not None and output_path.resolve() == confirmed_output_path.resolve():
             raise ValueError("Raw and confirmed paths must differ")
         self.confirmed_record_count = 0
@@ -112,8 +114,14 @@ class TrackWriter:
         dataframe["confirmed_at"] = dataframe["local_track_id"].map(
             {track_id: state.confirmed_at for track_id, state in confirmed.items()}
         ).astype("float64")
-        confirmed_data = dataframe[dataframe["final_customer_id"].notna()].copy()
-        # Retain pre-confirmation history, clearly marked by confirmed_at_frame=False.
+        dataframe["first_seen"] = dataframe["local_track_id"].map(
+            {track_id: state.first_seen for track_id, state in customer_states.items()}
+        ).astype("float64")
+        mask = dataframe["final_customer_id"].notna()
+        if self.confirmed_frames_only:
+            mask &= dataframe["confirmed_at_frame"]
+        confirmed_data = dataframe[mask].copy()
+        # Full histories remain in the debug table; strict exports mirror green-box frames.
         confirmed_data["customer_id"] = confirmed_data["final_customer_id"]
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.confirmed_output_path.parent.mkdir(parents=True, exist_ok=True)
