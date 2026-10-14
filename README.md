@@ -31,19 +31,19 @@ After installation, run these commands from the repository root. Replace the exa
 # Live tracking; also retain the original stream for later experiments
 python -m src.pipeline.tracking_pipeline \
   --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
-  --camera-id faydam1 --session-name doorway-walk \
+  --camera-id live1 --session-name doorway-walk \
   --model yolo11n.pt --tracker-profile recovery --record-stream
 
 # Repeat the experiment from the saved original video, without a camera connection
 python -m src.pipeline.replay_pipeline \
   --source /path/to/session_original.mkv \
-  --camera-id faydam1 --session-name doorway-walk-n \
+  --camera-id live1 --session-name doorway-walk-n \
   --model yolo11n.pt --tracker-profile recovery --stride 3 --save-video
 
 # Compare YOLO11s against the same recording in a separate session
 python -m src.pipeline.replay_pipeline \
   --source /path/to/session_original.mkv \
-  --camera-id faydam1 --session-name doorway-walk-s \
+  --camera-id live1 --session-name doorway-walk-s \
   --model yolo11s.pt --tracker-profile recovery --stride 3 --save-video
 ```
 
@@ -393,7 +393,7 @@ Run a single camera with the lightweight model and recovery profile:
 ```bash
 python -m src.pipeline.tracking_pipeline \
   --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
-  --camera-id faydam1 \
+  --camera-id live1 \
   --model yolo11n.pt \
   --tracker-profile recovery
 ```
@@ -403,7 +403,7 @@ Replace the placeholder URL with the camera's actual RTSP endpoint. Commands are
 | Option | Behavior |
 |---|---|
 | `--source` | Video path or RTSP URL. Omitted: the original Showroom dataset video. |
-| `--camera-id` | Output camera label. Live default: `faydam1`; file default: `Showroom`. |
+| `--camera-id` | Output camera label. Live default: `live1`; file default: `Showroom`. |
 | `--model` | Named YOLO weights or local weights path. Default: `yolo11n.pt`. |
 | `--tracker-profile` | `auto`, `baseline`, or `recovery`. `auto` selects recovery for live sources and baseline for files. |
 | `--session-name` | Optional descriptive label shared by the session folder and filenames. |
@@ -433,7 +433,7 @@ To compare small without running an additional detector:
 ```bash
 python -m src.pipeline.tracking_pipeline \
   --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
-  --camera-id faydam1 \
+  --camera-id live1 \
   --model yolo11s.pt \
   --tracker-profile recovery
 ```
@@ -463,12 +463,18 @@ Use `--tracker-profile baseline` to restore the original tracking settings. Cust
 Each session ID contains the camera, mode (`live`, `file` or `replay`) and readable date/time in Europe/Istanbul, without a random suffix. An optional `--session-name doorway-walk` adds a descriptive label. Videos and tables share this prefix so they can be matched directly; an existing session directory causes an error instead of being overwritten:
 
 ```text
-artifacts/sessions/faydam1/<session>/
+artifacts/sessions/live1/<session>/
 ├── <session>_confirmed_tracks.parquet
 ├── <session>_all_tracks_debug.parquet
 ├── <session>_annotated.mp4
 └── <session>_original.mkv       # only with --record-stream
 ```
+
+All camera workflows use `artifacts/sessions/<camera>/<session>/`: live camera runs are grouped under their camera label, while Showroom runs use `artifacts/sessions/Showroom/`. Each tracking run saves a confirmed table, a debug table and an annotated video. Replay saves the two tables and `summary.json`; its video is optional with `--save-video`. A live run with no decoded frames may have no annotated video. Replay’s explicit `--output-dir` overrides the default location.
+
+For Showroom analytics, select the session’s confirmed table with `--tracks`. `data/raw/` remains the dataset input location; the legacy no-argument analytics command reads only older exports.
+
+Session bundles are local and ignored by Git. Previously consolidated outputs retain their originals in `artifacts/session_archive/` for rollback. Migration metadata records missing historical files and any confirmation limits: legacy tables without frame-time confirmation flags can only be filtered by final customer IDs, not reconstructed green-box timing.
 
 The annotated MP4 contains the processed frames, green boxes for confirmed tracks, person labels, and elapsed time. It is written at the camera FPS. If processing skips frames, parts of this video can play faster than real time.
 
@@ -477,7 +483,7 @@ For an original recording independent of detection's frame skipping, add:
 ```bash
 python -m src.pipeline.tracking_pipeline \
   --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" \
-  --camera-id faydam1 \
+  --camera-id live1 \
   --model yolo11n.pt \
   --tracker-profile recovery \
   --record-stream
@@ -518,8 +524,8 @@ Select the confirmed history file and its camera/session:
 
 ```bash
 python -m src.pipeline.analytics_pipeline \
-  --tracks artifacts/sessions/faydam1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
-  --camera-id faydam1 \
+  --tracks artifacts/sessions/live1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
+  --camera-id live1 \
   --capture-id SESSION_ID
 ```
 
@@ -539,11 +545,11 @@ Custom inputs do not use the Showroom background. Without `--reference-frame`, t
 
 ```bash
 python -m src.pipeline.analytics_pipeline \
-  --tracks artifacts/sessions/faydam1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
-  --camera-id faydam1 \
+  --tracks artifacts/sessions/live1/SESSION_ID/SESSION_ID_confirmed_tracks.parquet \
+  --camera-id live1 \
   --capture-id SESSION_ID \
-  --reference-frame path/to/faydam1_reference.png \
-  --output-dir artifacts/sessions/faydam1/SESSION_ID/analytics
+  --reference-frame path/to/live1_reference.png \
+  --output-dir artifacts/sessions/live1/SESSION_ID/analytics
 ```
 
 Ground points use original image pixels; a resized or different-camera reference is unsuitable. A matching camera-specific zone configuration, if present, is used for figure overlays and dimension checks; it does not recompute missing zone values in the Parquet input.
@@ -854,7 +860,7 @@ The current implementation has several intentional limitations:
 - Annotated live MP4 recordings can appear accelerated when intermediate frames are skipped.
 - Track tables are written on normal exit, not periodically during a session.
 - Original-stream recording requires FFmpeg and does not reconnect automatically.
-- The analytics command defaults to the original Showroom example; live sessions must be selected explicitly with `--tracks`.
+- The analytics command defaults to the original Showroom example; new session exports must be selected explicitly with `--tracks`.
 - Heatmaps represent accumulated observed presence rather than unique-person density.
 
 These limitations define the next stages of development rather than being hidden assumptions of the system.
@@ -874,14 +880,3 @@ See [LICENSE](LICENSE) for details.
 **Arda Atik**
 
 Artificial Intelligence Engineer
-Readable recording label example: add `--session-name doorway-walk` to either the live or replay command. Videos and Parquet files then share a camera/label/date prefix. Existing recordings remain untouched unless explicitly migrated. Legacy files without frame-time confirmation flags can only be filtered by final assigned customer IDs; exact green-box start frames cannot be reconstructed.
-
-## Session folder layout
-
-Each live or replay session keeps its videos, clean Parquet, debug Parquet and optional summary together under `artifacts/sessions/<camera>/<session>/`. Live sessions normally contain two tables and one annotated video; `--record-stream` adds the original MKV. Replay produces two tables and summary.json; `--save-video` adds a video. A run with no decoded frames may have no video. Explicit replay --output-dir still overrides this location.
-
-Generated session bundles are local and ignored by Git. Showroom uses the same session layout under `artifacts/sessions/Showroom/`; dataset input and tracking behavior are unchanged. Older outputs can be consolidated into this layout with verified copies; source files are retained in a local `artifacts/session_archive/` tree for rollback. Legacy data without frame-time confirmation flags is filtered by final assigned customer IDs, not reconstructed green-frame timing. Migration details live beside the consolidated session. Missing historical videos or Parquet inputs are recorded rather than fabricated.
-
-### Showroom session outputs
-
-Each Showroom run has its own directory in `artifacts/sessions/Showroom/`, containing `<session>_annotated.mp4`, `<session>_confirmed_tracks.parquet`, and `<session>_all_tracks_debug.parquet`. For analytics, pass that session’s confirmed table with `--tracks`; the legacy default input remains available only for older exports. `data/raw/` remains the dataset input location.

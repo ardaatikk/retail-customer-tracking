@@ -9,7 +9,7 @@ def make_track(tid=1):
 
 
 def add(writer, state, second):
-    writer.add(camera_id='faydam1', capture_id='session1', frame_id=int(second*10),
+    writer.add(camera_id='live1', capture_id='session1', frame_id=int(second*10),
                timestamp=second, track=make_track(state.local_track_id), state=state, zone=None)
 
 

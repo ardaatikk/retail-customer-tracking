@@ -8,7 +8,7 @@ from src.analytics.summary import calculate_customer_summary, calculate_zone_sum
 from src.pipeline import analytics_pipeline as pipeline
 
 
-def data(camera='faydam1', capture='session1'):
+def data(camera='live1', capture='session1'):
     return pd.DataFrame([dict(camera_id=camera, capture_id=capture, customer_id=7,
                               timestamp=t, zone=None, ground_x=10, ground_y=20)
                          for t in [1., 3.]])
@@ -19,7 +19,7 @@ def test_custom_input_infers_scope_and_summary_identity(tmp_path):
     data().to_parquet(p)
     selected=load_selected_tracks(p)
     summary=calculate_customer_summary(selected)
-    assert summary.iloc[0].camera_id == 'faydam1'
+    assert summary.iloc[0].camera_id == 'live1'
     assert summary.iloc[0].capture_id == 'session1'
     assert summary.iloc[0].store_time_seconds == 2
     assert calculate_zone_summary(selected).empty

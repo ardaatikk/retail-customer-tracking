@@ -64,7 +64,7 @@ def run_tracking_pipeline(
     live_start_time = time.monotonic()
 
     try:
-        recording_camera_id = camera_id or ("faydam1" if video.is_live else CAMERA_ID)
+        recording_camera_id = camera_id or ("live1" if video.is_live else CAMERA_ID)
         recording_capture_id = CAPTURE_ID if not video.is_live else None
         session_id = make_session_id(recording_camera_id, "live" if video.is_live else "file", session_name)
         if video.is_live:
@@ -402,7 +402,7 @@ def run_tracking_pipeline(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Track a video file or live RTSP stream")
     parser.add_argument("--source", help="Video file path or RTSP URL")
-    parser.add_argument("--camera-id", help="Camera name (live default: faydam1)")
+    parser.add_argument("--camera-id", help="Camera name (live default: live1)")
     parser.add_argument("--record-stream", action="store_true",
                         help="Also record original RTSP video using FFmpeg stream copy")
     parser.add_argument("--model", default="yolo11n.pt", help="YOLO model weights or local path")

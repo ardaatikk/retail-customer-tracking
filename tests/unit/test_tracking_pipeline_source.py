@@ -81,14 +81,14 @@ def test_live_timeout_recovers_without_processing_stale_frame(monkeypatch, setup
     pipeline.run_tracking_pipeline('rtsp://fake/live')
     assert len(setup.frames) == 1
     assert setup.records[0]['timestamp'] == 5.0
-    assert setup.records[0]['camera_id'] == 'faydam1'
-    assert setup.records[0]['capture_id'].startswith('faydam1_live_')
+    assert setup.records[0]['camera_id'] == 'live1'
+    assert setup.records[0]['capture_id'].startswith('live1_live_')
     assert setup.records[0]['zone'] is None
     assert not setup.zones
-    assert setup.paths[0].parent.parent.name == 'faydam1'
+    assert setup.paths[0].parent.parent.name == 'live1'
     assert setup.paths[0].name.endswith('_all_tracks_debug.parquet')
     assert setup.confirmed_paths[0] == setup.paths[0].with_name(setup.records[0]['capture_id'] + '_confirmed_tracks.parquet')
-    assert '/faydam1/' in setup.video_paths[0]
+    assert '/live1/' in setup.video_paths[0]
     assert Path(setup.video_paths[0]).parent == setup.paths[0].parent
     assert video.seek is None
     assert video.released and setup.writers[0].released and setup.destroyed
@@ -136,15 +136,15 @@ def test_model_initialization_failure_releases_resources(monkeypatch, setup):
 
 
 def test_custom_live_camera_and_distinct_sessions(monkeypatch, setup):
-    ids = iter(['faydam2_live_2026-10-12_16-00-00', 'faydam2_live_2026-10-12_16-00-01'])
+    ids = iter(['live2_live_2026-10-12_16-00-00', 'live2_live_2026-10-12_16-00-01'])
     monkeypatch.setattr(pipeline, 'make_session_id', lambda *args: next(ids))
     for _ in range(2):
         frame = np.zeros((3, 4, 3), dtype=np.uint8)
         video = FakeVideo(True, [(True, frame)])
         monkeypatch.setattr(pipeline, 'VideoSource', lambda source: video)
         monkeypatch.setattr(pipeline.cv2, 'waitKey', lambda delay: ord('q'))
-        pipeline.run_tracking_pipeline('rtsp://fake/live', camera_id='faydam2')
-    assert [r['camera_id'] for r in setup.records] == ['faydam2', 'faydam2']
+        pipeline.run_tracking_pipeline('rtsp://fake/live', camera_id='live2')
+    assert [r['camera_id'] for r in setup.records] == ['live2', 'live2']
     assert setup.records[0]['capture_id'] != setup.records[1]['capture_id']
     assert setup.paths[0] != setup.paths[1]
     assert setup.video_paths[0] != setup.video_paths[1]
@@ -226,8 +226,8 @@ def test_invalid_tracker_profile():
 
 
 def test_existing_session_is_not_overwritten(monkeypatch, setup, tmp_path):
-    session = 'faydam2_live_2026-10-12_16-00-00'
-    folder = tmp_path / 'faydam2' / session
+    session = 'live2_live_2026-10-12_16-00-00'
+    folder = tmp_path / 'live2' / session
     folder.mkdir(parents=True)
     sentinel = folder / 'existing.txt'
     sentinel.write_text('keep')
@@ -235,7 +235,7 @@ def test_existing_session_is_not_overwritten(monkeypatch, setup, tmp_path):
     monkeypatch.setattr(pipeline, 'VideoSource', lambda source: video)
     monkeypatch.setattr(pipeline, 'make_session_id', lambda *args: session)
     with pytest.raises(FileExistsError):
-        pipeline.run_tracking_pipeline('rtsp://fake/live', camera_id='faydam2')
+        pipeline.run_tracking_pipeline('rtsp://fake/live', camera_id='live2')
     assert sentinel.read_text() == 'keep'
     assert video.released
     assert not setup.video_paths
