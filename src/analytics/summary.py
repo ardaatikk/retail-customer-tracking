@@ -110,9 +110,10 @@ def calculate_customer_summary(
             }
         )
 
-    return pd.DataFrame(
-        records
-    )
+    return pd.DataFrame(records, columns=[
+        "camera_id", "capture_id", "customer_id", "first_seen", "last_seen",
+        "store_time_seconds", "zones_visited", "zone_path",
+    ])
 
 
 def calculate_zone_summary(
@@ -236,6 +237,13 @@ def generate_summary(
         print(f"Zone summary: {zone_path}")
         for row in zone_summary.itertuples():
             print(f"  {row.zone}: {row.customer_count} tracks | total {row.total_dwell_seconds:.2f}s")
+
+
+def export_session_summary(confirmed_path: Path) -> None:
+    """Write one row per confirmed local customer without discarding frame logs."""
+    confirmed_path = Path(confirmed_path)
+    tracks = pd.read_parquet(confirmed_path)
+    generate_summary(tracks=tracks, output_dir=confirmed_path.parent / "analytics")
 
 
 if __name__ == "__main__":

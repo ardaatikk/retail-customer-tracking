@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.config.paths import SESSIONS_DIR
 from src.data.track_writer import TrackWriter
+from src.analytics.summary import export_session_summary
 from src.tracking.customer_state import CustomerStateManager
 from src.tracking.tracker import PersonTracker
 from src.video.source import VideoSource
@@ -133,6 +134,7 @@ def run_replay(
         exporter.save(manager.states)
         raw_rows, confirmed_rows, post_confirmation_rows = validate_exports(
             raw_path, confirmed_path)
+        export_session_summary(confirmed_path)
         summary = {
             'source_name': source.name, 'camera_id': camera_id, 'capture_id': capture_id,
             'model': Path(model_name).name, 'tracker_profile': tracker_profile,
