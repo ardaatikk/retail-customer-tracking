@@ -36,6 +36,8 @@ class FakeVideo:
 @pytest.fixture
 def setup(monkeypatch, tmp_path):
     calls = SimpleNamespace(frames=[], records=[], writers=[], paths=[], video_paths=[], confirmed_paths=[], zones=[], saved=False, destroyed=False)
+    calls.summary_paths = []
+    monkeypatch.setattr(pipeline, 'export_session_summary', calls.summary_paths.append)
     monkeypatch.setattr(pipeline, 'VIDEOS_DIR', tmp_path)
     monkeypatch.setattr(pipeline, 'SESSIONS_DIR', tmp_path)
     monkeypatch.setattr(pipeline, 'PROCESSED_DATA_DIR', tmp_path)
@@ -88,6 +90,7 @@ def test_live_timeout_recovers_without_processing_stale_frame(monkeypatch, setup
     assert setup.paths[0].parent.parent.name == 'live1'
     assert setup.paths[0].name.endswith('_all_tracks_debug.parquet')
     assert setup.confirmed_paths[0] == setup.paths[0].with_name(setup.records[0]['capture_id'] + '_confirmed_tracks.parquet')
+    assert setup.summary_paths == setup.confirmed_paths
     assert '/live1/' in setup.video_paths[0]
     assert Path(setup.video_paths[0]).parent == setup.paths[0].parent
     assert video.seek is None
@@ -104,6 +107,7 @@ def test_file_eof_and_seek_are_preserved(monkeypatch, setup):
     assert video.seek == (pipeline.cv2.CAP_PROP_POS_FRAMES, 50)
     assert [r['timestamp'] for r in setup.records] == [0, 1 / 25]
     assert len(setup.frames) == 2
+    assert setup.summary_paths == setup.confirmed_paths
     assert setup.records[0]['camera_id'] == 'Showroom'
     assert setup.records[0]['capture_id'] == 'capture1'
     assert setup.zones == ['Showroom']

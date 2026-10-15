@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![YOLO11](https://img.shields.io/badge/YOLO11-Ultralytics-blueviolet)](https://docs.ultralytics.com/models/yolo11/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green?logo=opencv&logoColor=white)](https://opencv.org/)
-[![Tests](https://img.shields.io/badge/Tests-122%20Passed-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-125%20Passed-brightgreen)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 An end-to-end computer vision pipeline for tracking customers in indoor environments and transforming raw video into interpretable behavioral analytics.
@@ -87,7 +87,7 @@ The pipeline combines pretrained person detection, multi-object tracking, custom
 - Per-zone analytics
 - Parquet-based structured outputs
 - Reproducible CITIC-MTMC dataset download
-- Automated unit testing with **122 tests**
+- Automated unit testing with **125 tests**
 - GitHub Actions continuous integration
 - Architecture prepared for future multi-camera tracking
 
@@ -286,6 +286,32 @@ CITIC-MTMC dataset validation passed.
 ```
 
 Raw datasets are excluded from version control.
+
+### One project, live and recorded inputs
+
+The full validation command above checks both the downloaded ZIP and the extracted dataset. If only the extracted dataset is available locally, tracking and replay can still use its videos; the archive check requires the ZIP to be downloaded first.
+
+The same checkout supports both workflows; keep a single dataset copy at `data/raw/citic_mtmc/dataset/`. The public dataset contains `capture1`, `capture2` and `capture3`, each with `Showroom`, `HallWide`, `HallSeg`, `PC` and `PF` videos. Live RTSP sessions do not depend on these files.
+
+```bash
+# Public Showroom dataset: annotated video and confirmed/debug tables
+python -m src.pipeline.tracking_pipeline
+
+# A local recording: replay summary, confirmed/debug tables and optional video
+python -m src.pipeline.replay_pipeline \
+  --source /path/to/recording.mkv --camera-id live1 \
+  --session-name recorded-test --tracker-profile recovery --save-video
+
+# Live camera: annotated video and confirmed/debug tables
+python -m src.pipeline.tracking_pipeline \
+  --source "rtsp://CAMERA_HOST:PORT/STREAM_PATH" --camera-id live1 \
+  --session-name live-test --tracker-profile recovery
+```
+
+Generated outputs stay under `artifacts/sessions/<camera>/<session>/`. The public Showroom heatmap and trajectory images in `artifacts/figures/` remain the README examples and are not replaced by new session analytics. To generate plots for another run, select its confirmed table with `--tracks` and a matching `--reference-frame`; outputs are written beside that session in `analytics/` by default.
+
+Local imports of historical Showroom outputs retain their source tables and figures separately, since earlier figures and tables may represent different runs. Multi-camera work snapshots are local recovery material, not an enabled cross-camera tracking pipeline. Camera synchronization and global identity association remain future integration work.
+
 
 ---
 
@@ -498,6 +524,12 @@ ffmpeg -i path/to/session_raw.mkv -map 0:v:0 -c:v copy \
   -movflags +faststart path/to/session_raw.mp4
 ```
 
+### Automatic per-track summaries
+
+On normal completion, tracking (file or RTSP) and recorded-video replay also write `analytics/customer_summary.parquet` inside the session. It contains one row per confirmed customer ID: camera/capture IDs, first and last observation times, elapsed observation span, and zone path/count. A recreated track receives a separate summary row; cross-camera or returning-person recognition is not applied. Detailed confirmed/debug logs are retained unchanged. Sessions without confirmed tracks produce an empty summary with named columns.
+
+`analytics/zone_summary.parquet` is written only when zone assignments exist. Heatmaps and trajectory images remain an explicit analytics step requiring a matching reference frame. Observation spans can include tracking gaps and are not continuous visible-time measurements.
+
 ### Raw and confirmed Parquet tables
 
 `<session>_all_tracks_debug.parquet` contains every observation returned by the tracker, including unconfirmed tracks. `<session>_confirmed_tracks.parquet` contains only observations that were already confirmed when processed, matching green-box frames. Unconfirmed tracks and pre-confirmation observations are excluded from this primary file. Their full histories remain in the clearly named debug table; a `first_seen` metadata column preserves the original start time for duration analysis.
@@ -602,6 +634,8 @@ The displayed store time and final observed time represent an elapsed span from 
 
 ## Testing
 
+Test discovery is restricted to `tests/` by `pytest.ini`, so local archived code is not collected. GitHub Actions runs the same suite with `pytest -q`.
+
 Run the test suite with:
 
 ```bash
@@ -611,7 +645,7 @@ pytest -q
 Current test suite:
 
 ```text
-122 passed
+125 passed
 ```
 
 Tests cover:
@@ -633,7 +667,7 @@ Tests cover:
 - Analytics camera/session selection, ID reuse isolation, raw history selection, and zone-free output
 - Offline replay outputs, native video dimensions, frame sampling, timestamps, and safe cleanup with synthetic frames
 
-Network access, a camera, FFmpeg, and real model inference are not required by the unit tests. The 122-test result was verified locally on 12 October 2026. The CI badge above reports the current GitHub workflow status; this local result is not a live CI report.
+Network access, a camera, FFmpeg, and real model inference are not required by the unit tests. The 125-test result was verified locally on 15 October 2026. The CI badge above reports the current GitHub workflow status; this local result is not a live CI report.
 
 ### Manual camera checks
 

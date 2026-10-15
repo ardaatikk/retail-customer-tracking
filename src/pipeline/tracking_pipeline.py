@@ -13,6 +13,7 @@ from src.config.paths import (
     SESSIONS_DIR,
 )
 from src.data.track_writer import TrackWriter
+from src.analytics.summary import export_session_summary
 from src.tracking.customer_state import (
     CustomerStateManager,
 )
@@ -315,6 +316,8 @@ def run_tracking_pipeline(
             customer_manager.states
         )
     )
+
+    export_session_summary(confirmed_track_output_path)
 
     confirmed_states = [
         state

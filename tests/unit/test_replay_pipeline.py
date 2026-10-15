@@ -61,7 +61,11 @@ def test_default_writes_tables_without_camera_media(prepared, tmp_path, monkeypa
     assert result['post_confirmation_rows'] < result['raw_rows']
     assert result['source_name'] == source.name
     assert not result['video_saved']
-    assert sorted(p.name for p in output.iterdir()) == sorted(['summary.json', result['capture_id']+'_confirmed_tracks.parquet', result['capture_id']+'_all_tracks_debug.parquet'])
+    assert sorted(p.name for p in output.iterdir()) == sorted(['analytics', 'summary.json', result['capture_id']+'_confirmed_tracks.parquet', result['capture_id']+'_all_tracks_debug.parquet'])
+    customer_summary = pd.read_parquet(output / 'analytics/customer_summary.parquet')
+    assert len(customer_summary) == 1
+    assert customer_summary.iloc[0].store_time_seconds == pytest.approx(7 / 8)
+    assert not (output / 'analytics/zone_summary.parquet').exists()
     assert result['confirmed_rows'] == result['post_confirmation_rows']
     assert pd.read_parquet(output/(result['capture_id']+'_confirmed_tracks.parquet')).confirmed_at_frame.all()
     assert factory.call_args.kwargs['confidence_threshold'] == .1
